@@ -2,48 +2,47 @@
 
 (defclass window ()
   ((y :initarg :y
+      :initform (error "window y position not provided")
       :accessor win-y) ; just use a package
    (x :initarg :x
+      :initform (error "window x position not provided")
       :accessor win-x)
    (lines :initarg :lines
+          :initform (error "window lines not provided")
           :accessor win-lines)
    (columns :initarg :columns
+            :initform (error "window columns not provided")
             :accessor win-cols)
    (focused-p :initform nil
               :accessor win-focused-p))
   (:documentation "Pure data."))
 
 (defgeneric present (window))
-(defgeneric handle-window-event (window ev))
 
 (defclass tui-base ()
   ((%lines :initarg :lines
-           :accessor tui-lines)
+           :accessor lines)
    (%columns :initarg :columns
-             :accessor tui-columns)
+             :accessor columns)
    (%windows :initarg :windows
              :initform (list)
              :accessor windows
              :documentation "Windows in drawing order.")
-   (%focused-window :initarg :focused-window
-                    :initform nil
-                    :accessor focused-window
-                    :type window)
    (%termios :initform nil
              :accessor %termios)
    (%got-winch :initform nil
                :accessor %got-winch)))
 
 (defgeneric start (tui))
-(defgeneric stop (tui))
+(defgeneric stop (tui)
+  (:documentation "Causes the terminal to be restored to its original state immediately.
+May only be called from within the dynamic-extent of a call to START."))
+
 (defgeneric redisplay (tui))
 (defgeneric handle-winch (tui))
 (defgeneric handle-event (tui ev))
 
 ;;; implementation
-
-(defmethod handle-event ((tui tui-base) ev)
-  nil)
 
 (defmethod handle-winch ((tui tui-base))
   ;; window resized, update dimensions
@@ -51,16 +50,9 @@
   ;; so next event will repaint with updated dimensions
   (when (%got-winch tui)
     (let ((dimensions (terminal-dimensions)))
-      (setf (tui-lines tui) (car dimensions)
-            (tui-columns tui) (cdr dimensions)
+      (setf (lines tui) (car dimensions)
+            (columns tui) (cdr dimensions)
             (%got-winch tui) nil))))
-
-(defmethod redisplay ((tui tui-base))
-  (loop :for window :in (windows tui)
-        :do (unless (eq window (focused-window tui))
-              (present window))
-        :finally (present (focused-window tui))
-                 (force-output)))
 
 ;; sigwinch handling - redrawn on next keypress.
 ;; This is more reasonable than pulling in iolib/cffi for the self-pipe hack
@@ -68,17 +60,16 @@
 (defconstant +sigwinch+ c-sigwinch
   "Signal number of SIGWINCH.")
 
-(defvar *tui-list* nil)
-
 (defvar *got-sigwinch* nil)
 (let (#+ccl sigwinch-thread)
   (defun catch-sigwinch ()
     "Enables handling SIGWINCH. May fail silently."
     #+ccl (setf sigwinch-thread
-                (bt:make-thread (lambda ()
-                                  (loop
-                                    (wait-for-signal 28 +sigwinch+)
-                                    (setf *got-sigwinch* t)))))
+                (ccl:process-run-function "sigwinch thread"
+                                          (lambda ()
+                                            (loop
+                                              (ccl:wait-for-signal 28 +sigwinch+)
+                                              (setf *got-sigwinch* t)))))
     #+ecl (ext:set-signal-handler +sigwinch+ (lambda () (setf *got-sigwinch* t)))
     #+sbcl (sb-sys:enable-interrupt +sigwinch+
                                     (lambda (signo info ucontext)
@@ -86,28 +77,28 @@
                                       (setf *got-sigwinch* t))))
 
   (defun reset-sigwinch ()
-    #+ccl (bt:interrupt-thread sigwinch-thread (lambda () (return)))
+    #+ccl (ccl:process-kill sigwinch-thread)
     #+ecl (ext:set-signal-handler +sigwinch+ :default)
     #+sbcl (sb-sys:enable-interrupt +sigwinch+ :default)))
 
 ;; our only responsibilities at this level
 
-(defmethod start ((tui tui-base))
-  (ti:set-terminal (uiop:getenv "TERM"))
-  (setf (%termios tui) (setup-terminal 0))
-  (enable-mouse)
-  (ti:tputs ti:enter-ca-mode)
-  (ti:tputs ti:clear-screen)
-  (force-output))
+(defmethod start :around ((tui tui-base))
+  (let (#+(or sbcl cmu) (*terminal-io* *standard-output*))
+    (destructuring-bind (lines . columns)
+        (terminal-dimensions)
+      (setf (lines tui) lines
+            (columns tui) columns))
+    (ti:set-terminal (uiop:getenv "TERM"))
+    (setf (%termios tui) (setup-terminal 0))
+    (call-next-method)))
 
-(defmethod stop ((tui tui-base))
+(defmethod stop :around ((tui tui-base))
   (when (%termios tui)
-    (restore-terminal (%termios tui) 0)
-    (setf (%termios tui) nil)
-    (disable-mouse)
-    (ti:tputs ti:orig-pair)
-    (ti:tputs ti:exit-ca-mode)
-    (force-output)))
+    (unwind-protect
+         (call-next-method)
+      (restore-terminal (%termios tui) 0)
+      (setf (%termios tui) nil))))
 
 (let ((horizontal-border-char #\─)
       (vertical-border-char #\│)

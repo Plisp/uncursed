@@ -4,6 +4,15 @@
 
 (in-package :uncursed-sys)
 
+(defun make-adjustable-string (&optional initial-contents)
+  (let ((string (make-array 0 :element-type 'character :fill-pointer t :adjustable t)))
+    (when initial-contents
+      (append-to-adjustable initial-contents string))
+    string))
+
+(defun append-to-adjustable (string adjustable-string)
+  (loop :for c :across string :do (vector-push-extend c adjustable-string)))
+
 ;; EQL is fine for integers
 (let ((cache (apply #'make-hash-table
                     #+(or sbcl ecl) (list :synchronized t)
@@ -82,10 +91,9 @@ backing FD. Returns NIL on failure."
   (fd :int)
   (optional-actions :int)
   (termios-p (:pointer (:struct c-termios))))
-
 (defun setup-terminal (fd)
-  "Disables terminal echoing and buffering. Returns a foreign pointer to the original termios.
-Sets process locale from environment so hopefully unicode works better."
+  "Disables terminal echoing and buffering and enables mouse mode 1003.
+Returns a pointer to the original termios. Sets process locale to environment."
   (cffi:with-foreign-string (s "")
     (cffi:foreign-funcall "setlocale" :int c-lc-ctype :string s :pointer))
   (let ((old-termios (cffi:foreign-alloc '(:struct c-termios))))
@@ -94,13 +102,21 @@ Sets process locale from environment so hopefully unicode works better."
     (cffi:with-foreign-object (new-termios '(:struct c-termios))
       (setf (cffi:mem-ref new-termios '(:struct c-termios))
             (cffi:mem-ref old-termios '(:struct c-termios)))
-      (cffi:with-foreign-slots ((c-iflag c-oflag c-lflag c-cflag) new-termios (:struct c-termios))
-        (setf c-iflag (logandc2 c-iflag (logior c-iexten c-igncr c-icrnl c-inlcr
-                                                c-inpck c-istrip
-                                                c-ixon c-ixoff)))
-        (setf c-oflag (logandc2 c-oflag c-opost))
-        (setf c-lflag (logandc2 c-lflag (logior c-icanon c-isig c-echo)))
-        (setf c-cflag (logandc2 c-lflag c-parenb))
+      (cffi:with-foreign-slots ((c-iflag c-oflag c-lflag c-cflag)
+                                new-termios (:struct c-termios))
+        (setf c-iflag (logandc2 c-iflag (logior c-iexten ; NO system-specific extensions
+                                                c-igncr ; don't ignore return
+                                                c-inlcr ; don't convert newline->CR
+                                                c-ixon c-ixoff ; handle Ctrl-q/s ourselves
+                                                ;; don't break unicode
+                                                c-inpck ; nobody does parity checking
+                                                c-istrip))) ; don't strip 8th bit
+        (setf c-iflag (logior c-iflag c-icrnl)) ; convert CR->newline XXX a hack for vico
+        (setf c-oflag (logandc2 c-oflag c-opost)) ; NO system-specific processing
+        (setf c-lflag (logandc2 c-lflag (logior c-icanon ; no buffering
+                                                c-isig ; we'll handle keys ourselves
+                                                c-echo))) ; no input echoing
+        (setf c-cflag (logandc2 c-lflag c-parenb)) ; no parity checking
         (when (minusp (tcsetattr fd c-set-attributes-now new-termios))
           (error-syscall-error "tcsetattr failed"))
         old-termios))))
@@ -203,7 +219,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                                    (ldb (byte 2 0) (1+ (if (> first 32) (- first 32) first)))
                                    (parse-integer second)
                                    (parse-integer third)
-                                   (unless (zerop (ldb (byte 1 4) first)) :control))))
+                                   (or (zerop (ldb (byte 1 4) first)) :control))))
                          ;;Now, if the sequences sent were sane, I wouldn't even need this COND.
                          ;;Xterm sends CONTROL SEQUENCE INTRODUCER, but with characters other than parameters immediately following it.
                          ;;Instead, I need a different case for each and then I can do the parsing, which is still followed by other identifying characters.
@@ -217,7 +233,6 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                                                                 if (char/= char #.(code-char #x00)) collect char))
                                                     'string))))
                               (if (char= read #.(code-char #x7E)) ;This is the stupid convention that doesn't scale to infinity.
-
                                   (let ((function-key (case integer (11 1) (12 2) (13 3) (14 4) (15 5) (17 6) (18 7) (19 8) (20 9) (21 10)
                                                             (23 11) (24 12) (25 13) (26 14) (28 15) (29 16) (31 17) (32 18) (33 19) (34 20))))
                                     (if function-key ; ugh
@@ -228,6 +243,11 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                                       (cons :function integer))))))))
       (and second (not third) (unread-char second))
       first)))
+
+(defun mouse-event-p (event)
+  (and (listp event)
+       (member (first event) '(:mouse :release :drag :hover
+                            :scroll-up :scroll-down :scroll-left :scroll-right))))
 
 (defun read-event-timeout (&optional timeout (stream *terminal-io*))
   #+sbcl (if timeout
@@ -262,7 +282,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   (ti:tputs ti:enter-ca-mode))
 
 (defun disable-alternate-screen ()
-  (ti:tputs ti:enter-ca-mode))
+  (ti:tputs ti:exit-ca-mode))
 
 (defun clear-screen ()
   (ti:tputs ti:clear-screen))
@@ -278,11 +298,85 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   (ti:tputs ti:cursor-address (car new-value) (cdr new-value)))
 
 (defun set-mouse-shape (style &key blink-p)
-  (let ((arg (case style
-               (:block 2)
-               (:underline 4)
-               (:bar 6))))
-    (format *terminal-io* "~c[~d q" #\esc (if blink-p (1- arg) arg))))
+  (if (eq style :invisible)
+      (ti:tputs ti:cursor-invisible)
+      (let ((arg (case style
+                   (:block 2)
+                   (:underline 4)
+                   (:bar 6))))
+        (ti:tputs ti:cursor-visible)
+        (format *terminal-io* "~c[~d q" #\esc (if blink-p (1- arg) arg)))))
+
+;; styling
+
+(defstruct (color (:conc-name nil))
+  (red (error "must provide red value") :type fixnum :read-only t)
+  (green (error "must provide green value") :type fixnum :read-only t)
+  (blue (error "must provide blue value") :type fixnum :read-only t))
+
+;; TODO split this out of vico and this library?
+(defstruct (style (:conc-name nil))
+  (fg nil :type (or color null) :read-only t)
+  (bg nil :type (or color null) :read-only t)
+  (boldp nil :type boolean :read-only t)
+  (italicp nil :type boolean :read-only t)
+  (underlinep nil :type boolean :read-only t))
+
+(defun style-difference (a b)
+  (let ((fga (fg a))
+        (fgb (fg b))
+        (bga (bg a))
+        (bgb (bg b))
+        differences)
+    (unless (or (and (null fga) (null fgb))
+                (and fga fgb
+                     (= (red fga) (red fgb))
+                     (= (green fga) (green fgb))
+                     (= (blue fga) (blue fgb))))
+      (setf (getf differences :fg) fgb))
+    (unless (or (and (null bga) (null bgb))
+                (and bga bgb
+                     (= (red bga) (red bgb))
+                     (= (green bga) (green bgb))
+                     (= (blue bga) (blue bgb))))
+      (setf (getf differences :bg) bgb))
+    (unless (eq (boldp a) (boldp b))
+      (setf (getf differences :bold) (boldp b)))
+    (unless (eq (italicp a) (italicp b))
+      (setf (getf differences :italic) (italicp b)))
+    (unless (eq (underlinep a) (underlinep b))
+      (setf (getf differences :underline) (underlinep b)))
+    differences))
+
+(defvar *default-style* (make-style))
+
+(defun set-style-from-old (current-style new-style)
+  (when-let ((diff (style-difference current-style new-style)))
+    (flet ((attr-string (name attr)
+             (case name
+               (:fg (if attr
+                        (format nil "38;2;~d;~d;~d;" (red attr) (green attr) (blue attr))
+                        (format nil "39;")))
+               (:bg (if attr
+                        (format nil "48;2;~d;~d;~d;" (red attr) (green attr) (blue attr))
+                        (format nil "49;")))
+               (:bold (if attr "1;" "22;"))
+               (:italic (if attr "3;" "23;"))
+               (:underline (if attr "4;" "24;"))
+               (otherwise ""))))
+      (let ((s (with-output-to-string (s)
+                 (format s "~c[" #\esc)
+                 (loop :for (name attr) :on diff :by #'cddr
+                       :do (write-string (attr-string name attr) s)))))
+        (setf (aref s (1- (length s))) #\m) ; last #\;->#\m
+        (write-string s *terminal-io*)))))
+
+(defun set-style (style)
+  (format *terminal-io* "~c[0m" #\esc) ; probably not the most portable
+  (set-style-from-old *default-style* style))
+
+(defun set-foreground (r g b)
+  (format *terminal-io* "~c[38;2;~d;~d;~dm" #\esc r g b))
 
 (defun set-background (r g b)
   (format *terminal-io* "~c[48;2;~d;~d;~dm" #\esc r g b))
