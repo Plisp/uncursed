@@ -3,9 +3,7 @@
   :author "tianlin qu"
   :license "GPLv3"
   :defsystem-depends-on ("cffi-grovel")
-  :depends-on (:alexandria
-               :cffi
-               :split-sequence
+  :depends-on (:cffi
                :terminfo)
   :version "0.1.0"
   :serial t

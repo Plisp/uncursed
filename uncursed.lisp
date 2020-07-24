@@ -12,18 +12,23 @@
 (defmethod print-object ((cell cell) stream)
   (format stream "#<cell string:~a style:~a>" (cell-string cell) (cell-style cell)))
 
-(defmethod cell/= (cell1 cell2)
+(defun cell/= (cell1 cell2)
   (or (style-difference (cell-style cell1) (cell-style cell2))
       (string/= (cell-string cell1) (cell-string cell2))))
+
+(defun wide-cell-p (cell)
+  (> (display-width (cell-string cell)) 1))
+
+(deftype buffer () '(array cell))
 
 (defclass tui (tui-base)
   ((%screen :initarg :screen
             :accessor screen
-            :type (array cell)
+            :type buffer
             :documentation "The contents of the screen")
    (%canvas :initarg :canvas
             :accessor canvas
-            :type (array cell)
+            :type buffer
             :documentation "The contents to be drawn to the screen")
    (%focused-window :initarg :focused-window
                     :initform nil
@@ -33,20 +38,45 @@
                    :initarg :event-handler
                    :accessor event-handler)))
 
+(define-condition window-bounds-error (uncursed-error)
+  ((coordinate :initarg :coordinate
+               :reader window-bounds-error-coordinate
+               :type integer)
+   (bounds :initarg :bounds
+           :reader window-bounds-error-bounds
+           :type (cons integer integer))
+   (window :initarg :window
+           :reader window-bounds-error-window
+           :type window))
+  (:report (lambda (condition stream)
+             (format stream "~d is not in bounds [~d,~d] of ~a"
+                     (window-bounds-error-coordinate condition)
+                     (car (window-bounds-error-bounds condition))
+                     (cdr (window-bounds-error-bounds condition))
+                     (window-bounds-error-window condition))))
+  (:documentation "Signaled if an attempt is made to index outside a window's bounds"))
+
+(define-condition wide-char-overwrite-error (uncursed-error)
+  ((y :initarg :y
+      :reader wide-char-overwrite-error-y)
+   (x :initarg :x
+      :reader wide-char-overwrite-error-x)
+   (buffer :initarg :buffer
+           :reader wide-char-overwrite-error-buffer))
+  (:report (lambda (condition stream)
+             (format stream "Coordinate intersects wide character: ~d,~d in ~a"
+                     (wide-char-overwrite-error-y condition)
+                     (wide-char-overwrite-error-x condition)
+                     (wide-char-overwrite-error-buffer condition))))
+  (:documentation "Signaled if an attempt is made to overwrite a wide character."))
+
+(defgeneric handle-winch (tui))
+
 (defclass standard-window (window)
   ())
 
 (defgeneric handle-mouse-event (window type button y x controlp))
 (defgeneric handle-key-event (window event))
-
-(defun handle-window-event (window event)
-  (if (mouse-event-p event)
-      (destructuring-bind (type button col line . controlp) event
-        (handle-mouse-event window type button
-                            (- line (win-y window))
-                            (- col (win-x window))
-                            controlp))
-      (handle-key-event window event)))
 
 (defvar *put-buffer*)
 (defvar *put-window*)
@@ -54,41 +84,63 @@
 (defun put (char line col &optional style (put-buffer *put-buffer*) (put-window *put-window*))
   (or (and put-buffer put-window)
       (error "PUT-BUFFER and PUT-WINDOW not both provided"))
+  (check-type put-buffer buffer)
+  (check-type put-window window)
   (check-type char character)
   (check-type style (or style null))
-  (or (typep line `(integer 1 ,(win-lines put-window)))
-      (error "LINE is not in bounds [1:~d]" (win-lines put-window)))
-  (let ((width (character-width char)))
-    (or (typep col `(integer 1 ,(- (win-cols put-window) (1- width))))
-        (error "COL is not in bounds [1:~d]" (- (win-cols put-window) (1- width))))
-    ;; logic
-    (let ((cell (aref put-buffer (+ (1- line) (win-y put-window)) (+ (1- col) (win-x put-window)))))
+  (let ((dimensions (dimensions put-window))
+        (width (character-width char)))
+    (or (<= 1 line (rect-rows dimensions))
+        (error 'window-bounds-error :coordinate line
+                                    :bounds (cons 1 (rect-rows dimensions))
+                                    :window put-window))
+    (or (<= 1 col (- (rect-cols dimensions) (1- width)))
+        (error 'window-bounds-error :coordinate col
+                                    :bounds (cons 1 (rect-cols dimensions))
+                                    :window put-window))
+    (let* ((cell-y (+ (rect-y dimensions) (1- line)))
+           (cell-x (+ (rect-x dimensions) (1- col)))
+           (cell (aref put-buffer cell-y cell-x)))
       (and style (setf (cell-style cell) style))
       (if (zerop width)
-          (error "zero-width characters not handled yet, this is where VECTOR-PUSH-EXTEND comes in")
-          (progn ; first erase nearby cells, if wide character
+          (vector-push-extend char (cell-string cell))
+          (progn
+            ;; clear previous wide character (if applicable)
+            ;; [old][""] -> [" "][new]
+            (unless (zerop cell-x)
+              (let ((prev (aref put-buffer cell-y (1- cell-x))))
+                (when (wide-cell-p prev)
+                  (restart-case
+                      (error 'wide-char-overwrite-error :y cell-y
+                                                        :x (1- cell-x)
+                                                        :buffer put-buffer)
+                    (overwrite-char ()
+                      :report "Overwrite the wide character"
+                      (setf (cell-string prev) (make-adjustable-string (string #\space))))
+                    (ignore-put ()
+                      :report "Do nothing"
+                      (return-from put t))))))
+            ;; width > 1: clear next character unconditionally (we checked for room above)
+            ;; and turn the next-next character into a space if the next was wide
+            ;; [.][old][""] -> [new][""][ ] erases old character
             (when (> width 1)
-              ;; clear previous wide character (if applicable)
-              ;; [wold][""] -> [" "][wnew]
-              (let ((prev (unless (zerop (+ (1- col) (win-x put-window)))
-                            (aref put-buffer
-                                  (+ (1- line) (win-y put-window))
-                                  (+ (1- col) (win-x put-window) -1)))))
-                (when (and prev (> (display-width (cell-string prev)) 1))
-                  (setf (cell-string prev) (make-adjustable-string (string #\space)))))
-              ;; clear next character unconditionally (we checked for room above)
-              ;; and turn the next-next characater into a space if the next was wide
-              ;; [.][wold][""] -> [wnew][""][ ] erases old character
-              (let ((next (aref put-buffer
-                                (+ (1- line) (win-y put-window))
-                                (+ (1- col) (win-x put-window) 1))))
-                (when (> (display-width (cell-string next)) 1)
-                  (setf (cell-string (aref put-buffer
-                                           (+ (1- line) (win-y put-window))
-                                           (+ (1- col) (win-x put-window) 2)))
-                        (make-adjustable-string (string #\space))))
+              (let ((next (aref put-buffer cell-y (1+ cell-x))))
+                (when (wide-cell-p next)
+                  (restart-case
+                      (error 'wide-char-overwrite-error :y cell-y
+                                                        :x (1+ cell-x)
+                                                        :buffer put-buffer)
+                    (overwrite-char ()
+                      :report "Overwrite the wide character"
+                      (setf (cell-string (aref put-buffer cell-y (+ 2 cell-x)))
+                            (make-adjustable-string (string #\space))))
+                    (ignore-put ()
+                      :report "Do nothing"
+                      (return-from put t))))
                 (setf (cell-string next) (make-adjustable-string))))
-            (setf (cell-string cell) (make-adjustable-string (string char))))))))
+            ;; finally write the character into its cell
+            (setf (cell-string cell) (make-adjustable-string (string char))))))
+    width))
 
 ;; (defun put-string (string line col &optional style)
 ;;   ())
@@ -113,6 +165,27 @@
   (let ((*put-window* window))
     (call-next-method)))
 
+(defmethod handle-winch ((tui tui))
+  (with-accessors ((canvas canvas)
+                   (screen screen)
+                   (lines lines)
+                   (columns columns))
+      tui
+    (let ((old-lines (array-dimension canvas 0))
+          (old-columns (array-dimension canvas 1)))
+      (setf canvas (adjust-array canvas (list lines columns)))
+      (setf screen (adjust-array screen (list lines columns)))
+      ;; fill empty columns in existing lines
+      (loop :for line :below old-lines
+            :do (loop :for column :from old-columns :below columns
+                      :do (setf (aref canvas line column) (make-instance 'cell)
+                                (aref screen line column) (make-instance 'cell))))
+      ;; fill new lines
+      (loop :for line :from old-lines :below lines
+            :do (loop :for column :from 0 :below columns
+                      :do (setf (aref canvas line column) (make-instance 'cell)
+                                (aref screen line column) (make-instance 'cell)))))))
+
 (defmethod redisplay ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen))
@@ -126,7 +199,7 @@
           :with last-width
           :for (cell . pos) :across diff
           :do (or (and last-width last-pos (= (cdr pos) (+ (cdr last-pos) last-width)))
-                  (setf (cursor-position) pos))
+                  (set-cursor-position (car pos) (cdr pos)))
               (set-style-from-old current-style (cell-style cell))
               (setf current-style (cell-style cell))
               (write-string (cell-string cell))
@@ -134,10 +207,17 @@
                     last-width (display-width (cell-string cell)))
           :finally (force-output)
                    (loop :for idx :below (array-total-size canvas)
-                         :do (setf (cell-string (row-major-aref screen idx))
-                                   (cell-string (row-major-aref canvas idx))
-                                   (cell-style (row-major-aref screen idx))
-                                   (cell-style (row-major-aref canvas idx)))))))
+                         :do (setf (row-major-aref screen idx) (row-major-aref canvas idx)
+                                   (row-major-aref canvas idx) (make-instance 'cell))))))
+
+(defun dispatch-mouse-event (window event)
+  (destructuring-bind (type button col line . controlp) event
+    (let* ((dimensions (dimensions window))
+           (rel-y (- line (rect-y dimensions)))
+           (rel-x (- col (rect-x dimensions))))
+      (when (and (<= 1 rel-y (rect-rows dimensions))
+                 (<= 1 rel-x (rect-cols dimensions)))
+        (handle-mouse-event window type button rel-y rel-x controlp)))))
 
 (defmethod start ((tui tui))
   (with-accessors ((canvas canvas)
@@ -147,23 +227,29 @@
                    (focused-window focused-window)
                    (event-handler event-handler))
       tui
-    (setf canvas (make-array (list lines columns) :element-type 'cell))
-    (setf screen (make-array (list lines columns) :element-type 'cell))
+    (setf canvas (make-array (list lines columns)))
+    (setf screen (make-array (list lines columns)))
     (loop :for idx :below (array-total-size canvas)
           :do (setf (row-major-aref canvas idx) (make-instance 'cell)
                     (row-major-aref screen idx) (make-instance 'cell)))
     (enable-alternate-screen)
     (set-mouse-shape :invisible)
     (enable-mouse)
+    (clear-screen)
     (catch-sigwinch)
     (unwind-protect
          (catch 'tui-quit
            (loop
              (redisplay tui)
              (let ((event (read-event)))
-               (handle-winch tui)
-               (unless (handle-window-event focused-window event)
-                 (funcall event-handler tui event)))))
+               (when (got-winch tui)
+                 (handle-winch tui))
+               ;; serve the event to one window, or the TUI catchall
+               (or (if (mouse-event-p event)
+                       (loop :for window :in (windows tui)
+                             :until (dispatch-mouse-event window event))
+                       (handle-key-event focused-window event))
+                   (funcall event-handler tui event)))))
       (disable-mouse)
       (set-mouse-shape :block)
       (disable-alternate-screen)
@@ -172,3 +258,38 @@
 
 (defmethod stop ((tui tui))
   (throw 'tui-quit nil))
+
+;; (let ((horizontal-border-char #\─)
+;;       (vertical-border-char #\│)
+;;       (top-left-curved-border-char #\╭)
+;;       (top-right-curved-border-char #\╮)
+;;       (bottom-left-curved-border-char #\╰)
+;;       (bottom-right-curved-border-char #\╯))
+;;   (defun curved-box-border (window style)
+;;     (check-type window window)
+;;     (check-type style style)
+;;     (set-style style)
+;;     (let ((dimensions (dimensions window)))
+;;       ;; horizontal borders and corners
+;;       (let ((horizontal-border (make-string (- (rect-cols dimensions) 2)
+;;                                             :initial-element horizontal-border-char)))
+;;         (set-cursor-position (rect-y dimensions) (rect-x dimensions))
+;;         (write-char top-left-curved-border-char)
+;;         (write-string horizontal-border)
+;;         (write-char top-right-curved-border-char)
+;;         (set-cursor-position (+ (rect-y dimensions) (1- (rect-rows dimensions)))
+;;                              (rect-x dimensions))
+;;         (write-char bottom-left-curved-border-char)
+;;         (write-string horizontal-border)
+;;         (write-char bottom-right-curved-border-char))
+;;       ;; vertical borders
+;;       (loop :for line :from (1+ (rect-y dimensions))
+;;             :repeat (- (rect-rows dimensions) 2)
+;;             :do (set-cursor-position line (rect-x dimensions))
+;;                 (write-char vertical-border-char))
+;;       (loop :for line :from (1+ (rect-y dimensions))
+;;             :repeat (- (rect-rows dimensions) 2)
+;;             :do (set-cursor-position line
+;;                                      (+ (rect-x dimensions) (- (rect-cols dimensions) 2) 1))
+;;                 (write-char vertical-border-char)))
+;;     (format t "~c[39m" #\esc)))

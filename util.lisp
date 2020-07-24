@@ -22,19 +22,7 @@
 values."
     (declare (optimize speed))
     (let ((codepoint (char-code character)))
-      (values-list
-       (ensure-gethash
-        codepoint cache
-        (cond ((= codepoint 0) (list 2 "^@")) ; NUL is ^@
-              ((= codepoint 9) (list 8 "        ")) ; TODO should be variable
-              ((<= #xD800 codepoint #xDFFF) (list 2 "�")) ; surrogate
-              (t
-               (let ((width (cffi:foreign-funcall "wcwidth" c-wchar codepoint :int)))
-                 (if (minusp width)
-                     (if (< codepoint 32) ; caret notation
-                         (list 2 (format nil "^~C" (code-char (logxor codepoint #x40))))
-                         (list 2 "�"))
-                     (list width (string character)))))))))))
+      (ensure-gethash codepoint cache (cffi:foreign-funcall "wcwidth" c-wchar codepoint :int)))))
 
 (defun display-width (string)
   "Good enough"
@@ -174,7 +162,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                           (let ((first (- (char-code (or read (return))) 32))
                                 (second (- (char-code (or read (return))) 32)))
                             (ignore-errors ;whoever designed this protocol should be executed ;) agreed
-                             (list* :mouse
+                             (list* :click
                                     (mod (1+ (char-code (or read (return)))) 4)
                                     (if (> first 223) (return) first)
                                     (if (> second 223) (return) second)))))
@@ -209,7 +197,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                                   third (or (and third (make-array (length third) :element-type 'character :initial-contents third)) default))
                             (list* (or release
                                        (case first
-                                         (0 :mouse) (1 :mouse) (2 :mouse)
+                                         (0 :click) (1 :click) (2 :click)
                                          (32 :drag) (34 :drag)
                                          (35 :hover) (51 :hover)
                                          (64 :scroll-up)
@@ -219,7 +207,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                                    (ldb (byte 2 0) (1+ (if (> first 32) (- first 32) first)))
                                    (parse-integer second)
                                    (parse-integer third)
-                                   (or (zerop (ldb (byte 1 4) first)) :control))))
+                                   (unless (zerop (ldb (byte 1 4) first)) :control))))
                          ;;Now, if the sequences sent were sane, I wouldn't even need this COND.
                          ;;Xterm sends CONTROL SEQUENCE INTRODUCER, but with characters other than parameters immediately following it.
                          ;;Instead, I need a different case for each and then I can do the parsing, which is still followed by other identifying characters.
@@ -246,8 +234,8 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
 
 (defun mouse-event-p (event)
   (and (listp event)
-       (member (first event) '(:mouse :release :drag :hover
-                            :scroll-up :scroll-down :scroll-left :scroll-right))))
+       (member (first event) '(:click :release :drag :hover
+                               :scroll-up :scroll-down :scroll-left :scroll-right))))
 
 (defun read-event-timeout (&optional timeout (stream *terminal-io*))
   #+sbcl (if timeout
@@ -273,6 +261,33 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   (when timeout (error "timeout not supported"))
   )
 
+;;; sigwinch
+
+(defvar *got-sigwinch* nil)
+
+(defconstant +sigwinch+ c-sigwinch
+  "Signal number of SIGWINCH.")
+
+(let (#+ccl sigwinch-thread)
+  (defun catch-sigwinch ()
+    "Enables handling SIGWINCH. May fail silently."
+    #+ccl (setf sigwinch-thread
+                (ccl:process-run-function "sigwinch thread"
+                                          (lambda ()
+                                            (loop
+                                              (ccl:wait-for-signal 28 +sigwinch+)
+                                              (setf *got-sigwinch* t)))))
+    #+ecl (ext:set-signal-handler +sigwinch+ (lambda () (setf *got-sigwinch* t)))
+    #+sbcl (sb-sys:enable-interrupt +sigwinch+
+                                    (lambda (signo info ucontext)
+                                      (declare (ignore signo info ucontext))
+                                      (setf *got-sigwinch* t))))
+
+  (defun reset-sigwinch ()
+    #+ccl (ccl:process-kill sigwinch-thread)
+    #+ecl (ext:set-signal-handler +sigwinch+ :default)
+    #+sbcl (sb-sys:enable-interrupt +sigwinch+ :default)))
+
 ;;; misc
 
 ;; NOTE: scrolling is near useless because most terminals don't support changing
@@ -293,9 +308,9 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
 (defun clear-chars (&optional (n 1))
   (ti:tputs ti:erase-chars n))
 
-(defun (setf cursor-position) (new-value)
+(defun set-cursor-position (line column)
   "NEW-VALUE is a (LINE . COLUMN) pair"
-  (ti:tputs ti:cursor-address (car new-value) (cdr new-value)))
+  (ti:tputs ti:cursor-address line column))
 
 (defun set-mouse-shape (style &key blink-p)
   (if (eq style :invisible)
@@ -309,18 +324,17 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
 
 ;; styling
 
-(defstruct (color (:conc-name nil))
-  (red (error "must provide red value") :type fixnum :read-only t)
-  (green (error "must provide green value") :type fixnum :read-only t)
-  (blue (error "must provide blue value") :type fixnum :read-only t))
-
 ;; TODO split this out of vico and this library?
 (defstruct (style (:conc-name nil))
-  (fg nil :type (or color null) :read-only t)
-  (bg nil :type (or color null) :read-only t)
-  (boldp nil :type boolean :read-only t)
-  (italicp nil :type boolean :read-only t)
-  (underlinep nil :type boolean :read-only t))
+  (fg nil :type (or null (integer #x000000 #xffffff)))
+  (bg nil :type (or null (integer #x000000 #xffffff)))
+  (boldp nil :type boolean)
+  (italicp nil :type boolean)
+  (underlinep nil :type boolean))
+
+(defun red (color) (ldb (byte 8 16) color))
+(defun green (color) (ldb (byte 8 8) color))
+(defun blue (color) (ldb (byte 8 0) color))
 
 (defun style-difference (a b)
   (let ((fga (fg a))
@@ -380,3 +394,20 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
 
 (defun set-background (r g b)
   (format *terminal-io* "~c[48;2;~d;~d;~dm" #\esc r g b))
+
+;; layouting utilities
+
+(defstruct (rectangle (:conc-name rect-))
+  (x (error "rectangle X not provided") :type fixnum)
+  (y (error "rectangle Y not provided") :type fixnum)
+  (rows (error "rectangle ROWS not provided") :type fixnum)
+  (cols (error "rectangle COLS not provided") :type fixnum))
+
+;; '(:v
+;;   window 0.3
+;;   (:h split1 0.5 split2)
+;;   another-window)
+
+;; (defun layout (spec)
+;;   (labels ((recur (spec )
+;;              ()))))

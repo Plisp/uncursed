@@ -4,13 +4,10 @@
   (:use :cl :alexandria)
   (:export #:uncursed-error
            #:syscall-error
-           #:window-bounds-error
 
            #:make-adjustable-string
            #:append-to-adjustable
 
-           #:color
-           #:make-color #:copy-color
            #:red #:green #:blue
 
            #:style
@@ -18,6 +15,10 @@
            #:fg #:bg #:boldp #:italicp #:underlinep
            #:style-difference
            #:*default-style*
+
+           #:rectangle
+           #:make-rectangle #:copy-rectangle
+           #:rect-x #:rect-y #:rect-rows #:rect-cols
 
            ;; util.lisp
            #:character-width
@@ -28,7 +29,7 @@
            #:enable-mouse #:disable-mouse
            #:enable-alternate-screen #:disable-alternate-screen
            #:clear-screen #:clear-to-end-of-line #:clear-chars
-           #:cursor-position
+           #:set-cursor-position
            #:set-mouse-shape
            #:set-foreground #:set-background
            #:set-style #:set-style-from-old
@@ -40,38 +41,55 @@
            #:reset-sigwinch
 
            #:tui-base
-           ;; slots
+           ;; methods
            #:lines #:columns
            #:windows
-           #:focused-window
-           #:event-handler
-           ;; methods
+           #:got-winch
            #:start
            #:stop
-           #:handle-winch
            #:handle-event
            #:redisplay
 
            #:window
-           ;; slots
-           #:win-y
-           #:win-x
-           #:win-lines
-           #:win-cols
-           #:win-focused-p
            ;; methods
+           #:dimensions
+           #:win-focused-p
            #:present
 
-           #:curved-box-border
+
            ))
 
 (defpackage :uncursed
   (:use :cl :uncursed-sys)
-  (:export #:tui
+  (:export #:cell
+           ;; methods
+           #:cell-style
+           #:cell-string
+
+           #:tui
+           ;; methods
+           #:handle-winch
+           #:focused-window
+           #:event-handler
+
+           #:standard-window
+           #:window-bounds-error
+           ;; methods
            #:handle-mouse-event
            #:handle-key-event
-           #:standard-window
+
            #:put
+           ;; errors
+           #:window-bounds-error
+           #:window-bounds-error-coordinate
+           #:window-bounds-error-bounds
+           #:window-bounds-error-window
+           #:wide-char-overwrite-error
+           ;; restarts
+           #:overwrite-char
+           #:ignore-put
+
+           #:curved-box-border
            ))
 
 (eval-when (:compile-toplevel :load-toplevel)

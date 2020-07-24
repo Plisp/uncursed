@@ -1,4 +1,10 @@
 # uncursed
 
 No curses.
-A higher-level buffered abstraction and an example paint app will be written soon, currently only low-level functionality is available. Supported implementations will include sbcl, ccl and ecl.
+A higher-level buffered abstraction and low-level utilities are available. Supported implementations will include sbcl, ccl and ecl.
+
+More examples and documentation will be written soon.
+
+- [ ] better input handling
+- [ ] timers
+- [ ] plist layouting/resizing
