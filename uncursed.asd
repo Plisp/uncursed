@@ -3,8 +3,7 @@
   :author "tianlin qu"
   :license "GPLv3"
   :defsystem-depends-on ("cffi-grovel")
-  :depends-on (:cffi
-               :terminfo)
+  :depends-on (:alexandria :cffi :terminfo)
   :version "0.1.0"
   :serial t
   :components ((:file "package")

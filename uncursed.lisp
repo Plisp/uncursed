@@ -4,17 +4,19 @@
   ((style :initform *default-style*
           :accessor cell-style
           :type style)
-   (string :initform (make-adjustable-string (string #\space))
+   (string :initform (make-string 1 :initial-element #\space)
            :accessor cell-string
-           :type string
+           :type simple-string
            :documentation "A grapheme cluster")))
 
 (defmethod print-object ((cell cell) stream)
   (format stream "#<cell string:~a style:~a>" (cell-string cell) (cell-style cell)))
 
 (defun cell/= (cell1 cell2)
+  (declare (optimize speed))
   (or (style-difference (cell-style cell1) (cell-style cell2))
-      (string/= (cell-string cell1) (cell-string cell2))))
+      (string/= (the simple-string (cell-string cell1))
+                (the simple-string (cell-string cell2)))))
 
 (defun wide-cell-p (cell)
   (> (display-width (cell-string cell)) 1))
@@ -36,7 +38,9 @@
                     :type window)
    (%event-handler :initform (error "must provide an event handler")
                    :initarg :event-handler
-                   :accessor event-handler)))
+                   :accessor event-handler)
+   (%timers :initform (list)
+            :accessor timers)))
 
 (define-condition window-bounds-error (uncursed-error)
   ((coordinate :initarg :coordinate
@@ -70,20 +74,19 @@
                      (wide-char-overwrite-error-buffer condition))))
   (:documentation "Signaled if an attempt is made to overwrite a wide character."))
 
-(defgeneric handle-winch (tui))
+(defgeneric handle-resize (tui))
 
 (defclass standard-window (window)
   ())
 
-(defgeneric handle-mouse-event (window type button y x controlp))
+(defgeneric handle-mouse-event (window type button line col controlp))
 (defgeneric handle-key-event (window event))
 
 (defvar *put-buffer*)
 (defvar *put-window*)
 
 (defun put (char line col &optional style (put-buffer *put-buffer*) (put-window *put-window*))
-  (or (and put-buffer put-window)
-      (error "PUT-BUFFER and PUT-WINDOW not both provided"))
+  (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
   (check-type put-buffer buffer)
   (check-type put-window window)
   (check-type char character)
@@ -101,9 +104,12 @@
     (let* ((cell-y (+ (rect-y dimensions) (1- line)))
            (cell-x (+ (rect-x dimensions) (1- col)))
            (cell (aref put-buffer cell-y cell-x)))
-      (and style (setf (cell-style cell) style))
+      (and style (setf (cell-style cell) (copy-style style)))
       (if (zerop width)
-          (vector-push-extend char (cell-string cell))
+          (let* ((string (cell-string cell))
+                 (old-length (length string)))
+            (setf (cell-string cell) (adjust-array string (1+ old-length))
+                  (schar (cell-string cell) old-length) char))
           (progn
             ;; clear previous wide character (if applicable)
             ;; [old][""] -> [" "][new]
@@ -116,7 +122,7 @@
                                                         :buffer put-buffer)
                     (overwrite-char ()
                       :report "Overwrite the wide character"
-                      (setf (cell-string prev) (make-adjustable-string (string #\space))))
+                      (setf (cell-string prev) (make-string 1 :initial-element #\space)))
                     (ignore-put ()
                       :report "Do nothing"
                       (return-from put t))))))
@@ -133,22 +139,52 @@
                     (overwrite-char ()
                       :report "Overwrite the wide character"
                       (setf (cell-string (aref put-buffer cell-y (+ 2 cell-x)))
-                            (make-adjustable-string (string #\space))))
+                            (make-string 1 :initial-element #\space)))
                     (ignore-put ()
                       :report "Do nothing"
                       (return-from put t))))
-                (setf (cell-string next) (make-adjustable-string))))
+                (setf (cell-string next) (make-string 0))))
             ;; finally write the character into its cell
-            (setf (cell-string cell) (make-adjustable-string (string char))))))
+            (setf (cell-string cell) (make-string 1 :initial-element char)))))
     width))
 
 ;; (defun put-string (string line col &optional style)
 ;;   ())
 
-;; (defun put-style (style x y len)
-;;   ())
+(defun put-style (style rect &optional (put-buffer *put-buffer*) (put-window *put-window*))
+  (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
+  (check-type put-buffer buffer)
+  (check-type put-window window)
+  (check-type rect rectangle)
+  (check-type style style)
+  (let ((dimensions (dimensions put-window)))
+    ;; TODO not the most informative errors?
+    (or (<= 0 (rect-y rect))
+        (error 'window-bounds-error :coordinate (rect-y rect)
+                                    :bounds (cons 0 (rect-rows dimensions))
+                                    :window put-window))
+    (or (<= (+ (rect-y rect) (rect-rows rect)) (rect-rows dimensions))
+        (error 'window-bounds-error :coordinate (+ (rect-y rect) (rect-rows rect))
+                                    :bounds (cons 0 (rect-rows dimensions))
+                                    :window put-window))
+    (or (<= 0 (rect-x rect))
+        (error 'window-bounds-error :coordinate (rect-x rect)
+                                    :bounds (cons 0 (rect-cols dimensions))
+                                    :window put-window))
+    (or (<= (+ (rect-x rect) (rect-cols rect)) (rect-cols dimensions))
+        (error 'window-bounds-error :coordinate (+ (rect-x rect) (rect-cols rect))
+                                    :bounds (cons 0 (rect-cols dimensions))
+                                    :window put-window))
+    (loop :with style = (copy-style style) ; to prevent mutability shenanigans
+          :repeat (rect-rows rect)
+          :for y :from (+ (rect-y dimensions) (rect-y rect))
+          :do (loop :repeat (rect-cols rect)
+                    :for x :from (+ (rect-x dimensions) (rect-x rect))
+                    :do (setf (cell-style (aref put-buffer y x)) style)))))
 
 (defun buffer-diff (old new)
+  (declare (optimize speed)
+           (type (simple-array cell 2) old new))
   (assert (= (array-total-size old) (array-total-size new)))
   (loop :with diff = (make-array 0 :fill-pointer t :adjustable t)
         :with width = (array-dimension old 1)
@@ -165,7 +201,7 @@
   (let ((*put-window* window))
     (call-next-method)))
 
-(defmethod handle-winch ((tui tui))
+(defmethod handle-resize ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen)
                    (lines lines)
@@ -198,7 +234,9 @@
           :with last-pos
           :with last-width
           :for (cell . pos) :across diff
-          :do (or (and last-width last-pos (= (cdr pos) (+ (cdr last-pos) last-width)))
+          :do (or (and last-width last-pos
+                       (= (car pos) (car last-pos))
+                       (= (cdr pos) (+ (cdr last-pos) last-width)))
                   (set-cursor-position (car pos) (cdr pos)))
               (set-style-from-old current-style (cell-style cell))
               (setf current-style (cell-style cell))
@@ -213,15 +251,40 @@
 (defun dispatch-mouse-event (window event)
   (destructuring-bind (type button col line . controlp) event
     (let* ((dimensions (dimensions window))
-           (rel-y (- line (rect-y dimensions)))
-           (rel-x (- col (rect-x dimensions))))
-      (when (and (<= 1 rel-y (rect-rows dimensions))
-                 (<= 1 rel-x (rect-cols dimensions)))
-        (handle-mouse-event window type button rel-y rel-x controlp)))))
+           (relative-line (- line (rect-y dimensions)))
+           (relative-column (- col (rect-x dimensions))))
+      (when (and (<= 1 relative-line (rect-rows dimensions))
+                 (<= 1 relative-column (rect-cols dimensions)))
+        (handle-mouse-event window type button relative-line relative-column controlp)))))
+
+(defclass timer ()
+  ((callback :initarg :callback
+             :accessor timer-callback
+             :documentation "A function that is run when the timer expires. It is a function
+of one argument, the TUI object it was scheduled with and is expected to return one value:
+either the next timer expiry interval or NIL, meaning to cancel the timer.")
+   (interval :initarg :interval
+             :accessor timer-interval
+             :type (real 0))))
+
+(defun make-timer (interval callback)
+  (make-instance 'timer :interval interval :callback callback))
+
+(defmethod schedule-timer ((tui tui) timer)
+  (let ((interval (timer-interval timer))
+        (callback (timer-callback timer)))
+    (check-type callback function)
+    (check-type interval (real 0))
+    (push timer (timers tui)) ; TODO maybe do this better
+    (setf (timers tui) (stable-sort (timers tui) #'< :key #'timer-interval))))
+
+(defmethod unschedule-timer ((tui tui) timer)
+  (setf (timers tui) (delete timer (timers tui))))
 
 (defmethod start ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen)
+                   (timers timers)
                    (lines lines)
                    (columns columns)
                    (focused-window focused-window)
@@ -241,15 +304,40 @@
          (catch 'tui-quit
            (loop
              (redisplay tui)
-             (let ((event (read-event)))
+             (let* ((before-read (get-internal-real-time))
+                    (next-timer (pop timers))
+                    (next-timeout (when next-timer (timer-interval next-timer)))
+                    (event (if next-timer
+                               (read-event-timeout next-timeout)
+                               (read-event))))
                (when (got-winch tui)
-                 (handle-winch tui))
-               ;; serve the event to one window, or the TUI catchall
-               (or (if (mouse-event-p event)
-                       (loop :for window :in (windows tui)
-                             :until (dispatch-mouse-event window event))
-                       (handle-key-event focused-window event))
-                   (funcall event-handler tui event)))))
+                 (handle-resize tui))
+               (if event
+                   ;; serve the event to one window, or the TUI catchall
+                   (let ((now (get-internal-real-time)))
+                     (push next-timer timers)
+                     (map () #'(lambda (timer)
+                                 (when timer ;TIMER=NIL?
+                                   (setf (timer-interval timer)
+                                         (max (- (timer-interval timer)
+                                                 (/ (- now before-read)
+                                                    internal-time-units-per-second))
+                                              0))))
+                          timers)
+                     (or (if (mouse-event-p event)
+                             (loop :for window :in (windows tui)
+                                   :until (dispatch-mouse-event window event))
+                             (handle-key-event focused-window event))
+                         (funcall event-handler tui event)))
+                   ;; process expired timer
+                   (progn
+                     (map () #'(lambda (timer)
+                                 (decf (timer-interval timer) next-timeout))
+                          timers)
+                     (let ((next-interval (funcall (timer-callback next-timer) tui)))
+                       (when next-interval
+                         (setf (timer-interval next-timer) next-interval)
+                         (schedule-timer tui next-timer))))))))
       (disable-mouse)
       (set-mouse-shape :block)
       (disable-alternate-screen)

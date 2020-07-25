@@ -21,8 +21,6 @@
   (cond ((and (characterp ev) (char= ev #\etb))
          (tui:stop tui))))
 
-(defvar *palette-window*)
-
 (defclass palette-view (tui:standard-window)
   ((colors :initarg :colors
            :accessor colors)
@@ -69,7 +67,7 @@
                               (tui:cell-style (row-major-aref tui::*put-buffer* i))
                               (tui:cell-style cell))))))
 
-(defmethod tui:handle-mouse-event ((window layer-view) type button y x controlp)
+(defmethod tui:handle-mouse-event ((window layer-view) type button line col controlp)
   (declare (ignore controlp))
   (when (and (or (eq type :click) (eq type :drag))
              (= button 1))
@@ -82,14 +80,16 @@
                        (lambda (e)
                          ;; tried to put wide character at horizontal edge,
                          ;; only way the coordinate could be 'in-bounds'
+                         ;; other accesses are an error and the handler will decline
                          (when (= (tui:window-bounds-error-coordinate e)
                                   (tui:rect-cols (tui:dimensions
                                                   (tui:window-bounds-error-window e))))
                            (return-from draw)))))
         (tui:put (draw-char *paint-ui*)
-                 y x
+                 line col
                  (draw-style *paint-ui*)
-                 (first (layers window)) window)))))
+                 (first (layers window))
+                 window)))))
 
 (defmethod tui:handle-key-event ((window layer-view) event)
   (when (and (characterp event) (graphic-char-p event))
@@ -122,7 +122,7 @@
   (let* ((dimensions (tui:terminal-dimensions))
          (rows (car dimensions))
          (columns (cdr dimensions))
-         (*palette-window*
+         (palette-window
            (make-instance 'palette-view :dimensions (tui:make-rectangle :x 0
                                                                         :y 0
                                                                         :cols 3
@@ -138,7 +138,7 @@
                                       :layers (list initial-layer)))
          (*paint-ui*
            (make-instance 'paint-ui :focused-window layer-view
-                                    :windows (list layer-view *palette-window*)
+                                    :windows (list layer-view palette-window)
                                     :event-handler #'tui-handle-event)))
     (loop :for idx :below (array-total-size initial-layer)
           :do (setf (row-major-aref initial-layer idx) (make-instance 'tui:cell)))

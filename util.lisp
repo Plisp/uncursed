@@ -4,15 +4,6 @@
 
 (in-package :uncursed-sys)
 
-(defun make-adjustable-string (&optional initial-contents)
-  (let ((string (make-array 0 :element-type 'character :fill-pointer t :adjustable t)))
-    (when initial-contents
-      (append-to-adjustable initial-contents string))
-    string))
-
-(defun append-to-adjustable (string adjustable-string)
-  (loop :for c :across string :do (vector-push-extend c adjustable-string)))
-
 ;; EQL is fine for integers
 (let ((cache (apply #'make-hash-table
                     #+(or sbcl ecl) (list :synchronized t)
@@ -21,8 +12,11 @@
     "Returns the displayed width of CHARACTER and its string representation as multiple
 values."
     (declare (optimize speed))
-    (let ((codepoint (char-code character)))
-      (ensure-gethash codepoint cache (cffi:foreign-funcall "wcwidth" c-wchar codepoint :int)))))
+    (let* ((codepoint (char-code character))
+           (result (gethash codepoint cache)))
+      (or result
+          (setf (gethash codepoint cache)
+                (cffi:foreign-funcall "wcwidth" c-wchar codepoint :int))))))
 
 (defun display-width (string)
   "Good enough"
@@ -246,7 +240,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
              (read-event stream))
   #+ccl (if timeout
             (handler-case
-                (ccl:with-input-timeout ((s stream) 1)
+                (ccl:with-input-timeout ((s stream) timeout)
                   (read-event s))
               (ccl:input-timeout ())))
   ;; TODO best way to do this on ecl?

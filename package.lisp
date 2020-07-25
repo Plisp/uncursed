@@ -5,9 +5,6 @@
   (:export #:uncursed-error
            #:syscall-error
 
-           #:make-adjustable-string
-           #:append-to-adjustable
-
            #:red #:green #:blue
 
            #:style
@@ -66,11 +63,15 @@
            #:cell-style
            #:cell-string
 
+           #:make-timer
+
            #:tui
            ;; methods
-           #:handle-winch
+           #:handle-resize
            #:focused-window
            #:event-handler
+           #:schedule-timer
+           #:unschedule-timer
 
            #:standard-window
            #:window-bounds-error
@@ -79,6 +80,7 @@
            #:handle-key-event
 
            #:put
+           #:put-style
            ;; errors
            #:window-bounds-error
            #:window-bounds-error-coordinate
