@@ -79,8 +79,8 @@
 (defclass standard-window (window)
   ())
 
-(defgeneric handle-mouse-event (window type button line col controlp))
-(defgeneric handle-key-event (window event))
+(defgeneric handle-mouse-event (window tui type button line col controlp))
+(defgeneric handle-key-event (window tui event))
 
 (defvar *put-buffer*)
 (defvar *put-window*)
@@ -148,8 +148,11 @@
             (setf (cell-string cell) (make-string 1 :initial-element char)))))
     width))
 
-;; (defun put-string (string line col &optional style)
-;;   ())
+(defun puts (string line col &optional style (put-buffer *put-buffer*) (put-window *put-window*))
+  (loop :for i :below (length string)
+        :with next-col = col
+        :do (incf next-col
+                  (put (char string i) line next-col style put-buffer put-window))))
 
 (defun put-style (style rect &optional (put-buffer *put-buffer*) (put-window *put-window*))
   (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
@@ -248,14 +251,14 @@
                          :do (setf (row-major-aref screen idx) (row-major-aref canvas idx)
                                    (row-major-aref canvas idx) (make-instance 'cell))))))
 
-(defun dispatch-mouse-event (window event)
+(defun dispatch-mouse-event (window tui event)
   (destructuring-bind (type button col line . controlp) event
     (let* ((dimensions (dimensions window))
            (relative-line (- line (rect-y dimensions)))
            (relative-column (- col (rect-x dimensions))))
       (when (and (<= 1 relative-line (rect-rows dimensions))
                  (<= 1 relative-column (rect-cols dimensions)))
-        (handle-mouse-event window type button relative-line relative-column controlp)))))
+        (handle-mouse-event window tui type button relative-line relative-column controlp)))))
 
 (defclass timer ()
   ((callback :initarg :callback
@@ -281,7 +284,7 @@ either the next timer expiry interval or NIL, meaning to cancel the timer.")
 (defmethod unschedule-timer ((tui tui) timer)
   (setf (timers tui) (delete timer (timers tui))))
 
-(defmethod start ((tui tui))
+(defmethod run ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen)
                    (timers timers)
@@ -325,9 +328,9 @@ either the next timer expiry interval or NIL, meaning to cancel the timer.")
                                               0))))
                           timers)
                      (or (if (mouse-event-p event)
-                             (loop :for window :in (windows tui)
-                                   :until (dispatch-mouse-event window event))
-                             (handle-key-event focused-window event))
+                             (loop :for window :in (copy-list (windows tui))
+                                     :thereis (dispatch-mouse-event window tui event))
+                             (handle-key-event focused-window tui event))
                          (funcall event-handler tui event)))
                    ;; process expired timer
                    (progn

@@ -8,4 +8,4 @@ More examples and documentation will be written soon.
 - [x] unicode support
 - [ ] more comprehensive input handling
 - [x] timers
-- [ ] plist layouting/resizing
+- [ ] plist layouting/resizing (or leave it up to the application?)

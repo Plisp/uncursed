@@ -25,10 +25,10 @@
    (%got-winch :initform nil
                :accessor got-winch)))
 
-(defgeneric start (tui))
+(defgeneric run (tui))
 (defgeneric stop (tui)
   (:documentation "Causes the terminal to be restored to its original state immediately.
-May only be called from within the dynamic-extent of a call to START."))
+May only be called from within the dynamic-extent of a call to RUN."))
 
 (defgeneric redisplay (tui))
 (defgeneric handle-event (tui ev))
@@ -54,7 +54,7 @@ May only be called from within the dynamic-extent of a call to START."))
 
 ;; our only responsibilities at this level
 
-(defmethod start :around ((tui tui-base))
+(defmethod run :around ((tui tui-base))
   (let (#+(or sbcl cmu) (*terminal-io* *standard-output*))
     (destructuring-bind (lines . columns)
         (terminal-dimensions)
@@ -62,11 +62,8 @@ May only be called from within the dynamic-extent of a call to START."))
             (columns tui) columns))
     (ti:set-terminal (uiop:getenv "TERM"))
     (setf (%termios tui) (setup-terminal 0))
-    (call-next-method)))
-
-(defmethod stop :around ((tui tui-base))
-  (when (%termios tui)
     (unwind-protect
          (call-next-method)
-      (restore-terminal (%termios tui) 0)
-      (setf (%termios tui) nil))))
+      (when (%termios tui)
+        (restore-terminal (%termios tui) 0)
+        (setf (%termios tui) nil)))))

@@ -42,7 +42,7 @@
            #:lines #:columns
            #:windows
            #:got-winch
-           #:start
+           #:run
            #:stop
            #:handle-event
            #:redisplay
@@ -80,6 +80,7 @@
            #:handle-key-event
 
            #:put
+           #:puts
            #:put-style
            ;; errors
            #:window-bounds-error

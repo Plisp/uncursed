@@ -142,7 +142,7 @@
                                     :event-handler #'tui-handle-event)))
     (loop :for idx :below (array-total-size initial-layer)
           :do (setf (row-major-aref initial-layer idx) (make-instance 'tui:cell)))
-    (tui:start *paint-ui*)))
+    (tui:run *paint-ui*)))
 
 (defun main ()
   (if (member :slynk *features*)
