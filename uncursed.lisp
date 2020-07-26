@@ -105,7 +105,7 @@
            (cell-x (+ (rect-x dimensions) (1- col)))
            (cell (aref put-buffer cell-y cell-x)))
       (and style (setf (cell-style cell) (copy-style style)))
-      (if (zerop width)
+      (if (zerop width) ; this should not be common
           (let* ((string (cell-string cell))
                  (old-length (length string)))
             (setf (cell-string cell) (adjust-array string (1+ old-length))
@@ -125,10 +125,8 @@
                       (setf (cell-string prev) (make-string 1 :initial-element #\space)))
                     (ignore-put ()
                       :report "Do nothing"
-                      (return-from put t))))))
-            ;; width > 1: clear next character unconditionally (we checked for room above)
-            ;; and turn the next-next character into a space if the next was wide
-            ;; [.][old][""] -> [new][""][ ] erases old character
+                      (return-from put))))))
+            ;; width > 1: clear next character (we checked for room above)
             (when (> width 1)
               (let ((next (aref put-buffer cell-y (1+ cell-x))))
                 (when (wide-cell-p next)
@@ -136,23 +134,50 @@
                       (error 'wide-char-overwrite-error :y cell-y
                                                         :x (1+ cell-x)
                                                         :buffer put-buffer)
+                    ;; turn the next-next character into a space if the next was wide
+                    ;; [.][old][""] -> [new][""][ ] erases old character
                     (overwrite-char ()
                       :report "Overwrite the wide character"
                       (setf (cell-string (aref put-buffer cell-y (+ 2 cell-x)))
                             (make-string 1 :initial-element #\space)))
                     (ignore-put ()
                       :report "Do nothing"
-                      (return-from put t))))
+                      (return-from put))))
                 (setf (cell-string next) (make-string 0))))
             ;; finally write the character into its cell
             (setf (cell-string cell) (make-string 1 :initial-element char)))))
     width))
 
 (defun puts (string line col &optional style (put-buffer *put-buffer*) (put-window *put-window*))
-  (loop :for i :below (length string)
-        :with next-col = col
-        :do (incf next-col
-                  (put (char string i) line next-col style put-buffer put-window))))
+  (let* ((char-widths (map 'vector #'character-width string))
+         (last-non-combining-char-pos (position-if-not #'zerop char-widths :from-end t)))
+    (or last-non-combining-char-pos
+        (loop :for char :across string ;all combining
+              :do (put char line col style put-buffer put-window)))
+    (let ((last-non-combining-char (char string last-non-combining-char-pos))
+          (last-non-combining-char-visual-offset
+            (reduce #'+ char-widths :end last-non-combining-char-pos))
+          (strlen (length string)))
+      ;; signal overwrite/out of bounds error for last character early, before we write the rest
+      (or (put last-non-combining-char
+               line (+ col last-non-combining-char-visual-offset)
+               style
+               put-buffer put-window)
+          ;; if IGNORE-PUT restart selected, abort here
+          (return-from puts))
+      ;; write trailing combining characters
+      (loop :for i :from (1+ last-non-combining-char-pos) :below strlen
+            :do (put (char string i)
+                     line (+ col last-non-combining-char-visual-offset)
+                     style
+                     put-buffer put-window))
+      ;; put the rest normally
+      (loop :for i :below last-non-combining-char-pos
+            :with next-col = col
+            :do (incf next-col (put (char string i)
+                                    line next-col
+                                    style
+                                    put-buffer put-window))))))
 
 (defun put-style (style rect &optional (put-buffer *put-buffer*) (put-window *put-window*))
   (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
@@ -247,9 +272,9 @@
               (setf last-pos pos
                     last-width (display-width (cell-string cell)))
           :finally (force-output)
+                   (rotatef screen canvas)
                    (loop :for idx :below (array-total-size canvas)
-                         :do (setf (row-major-aref screen idx) (row-major-aref canvas idx)
-                                   (row-major-aref canvas idx) (make-instance 'cell))))))
+                         :do (setf (row-major-aref canvas idx) (make-instance 'cell))))))
 
 (defun dispatch-mouse-event (window tui event)
   (destructuring-bind (type button col line . controlp) event

@@ -41,7 +41,7 @@
     (tui:put #\< (1+ fg-index) 3 (tui:make-style :fg (nth fg-index colors)))
     (tui:put #\< (1+ bg-index) 3 (tui:make-style :bg (nth bg-index colors)))))
 
-(defmethod tui:handle-mouse-event ((window palette-view) type button y x controlp)
+(defmethod tui:handle-mouse-event ((window palette-view) tui type button y x controlp)
   (declare (ignore controlp))
   (when (and (eq type :click)
              (<= 1 x 2))
@@ -67,7 +67,7 @@
                               (tui:cell-style (row-major-aref tui::*put-buffer* i))
                               (tui:cell-style cell))))))
 
-(defmethod tui:handle-mouse-event ((window layer-view) type button line col controlp)
+(defmethod tui:handle-mouse-event ((window layer-view) tui type button line col controlp)
   (declare (ignore controlp))
   (when (and (or (eq type :click) (eq type :drag))
              (= button 1))
@@ -91,7 +91,7 @@
                  (first (layers window))
                  window)))))
 
-(defmethod tui:handle-key-event ((window layer-view) event)
+(defmethod tui:handle-key-event ((window layer-view) tui event)
   (when (and (characterp event) (graphic-char-p event))
     (setf (draw-char *paint-ui*) event)))
 

@@ -4,7 +4,7 @@
   :license "GPLv3"
   :defsystem-depends-on ("cffi-grovel")
   :depends-on (:alexandria :cffi :terminfo)
-  :version "0.1.0"
+  :version "0.2.0"
   :serial t
   :components ((:file "package")
                (:cffi-grovel-file "grovel")

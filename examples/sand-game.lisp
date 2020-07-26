@@ -186,17 +186,18 @@
 
 (defmethod tui:handle-mouse-event ((window pizza-view) tui type button line col controlp)
   (alexandria:deletef (tui:windows tui) window)
-  (setf *panel-food* (min (+ *panel-food* 15) *panel-bar-max*))
+  (setf *panel-food* (min (+ *panel-food* 5) *panel-bar-max*))
   t)
 
 ;;; game logic
 
 (defun tui-handle-event (tui ev)
-  (cond ((and (characterp ev) (char= ev #\etb)) ; todo remove
+  (cond ((and (characterp ev) (char= ev #\etb))
          (tui:stop tui))
-        ((and (characterp ev) (char= ev #\esc))
-         (incf *hp* *tui-width*)
-         (break))))
+        ;; ((and (characterp ev) (char= ev #\esc))
+        ;;  (incf *hp* *tui-width*)
+        ;;  (break))
+        ))
 
 (defvar *tick* 0.1)
 (defvar *time*)
@@ -212,7 +213,7 @@
 (defun %game-tick (tui)
   (incf *time*)
   (when (> *score* 5000)
-    (setf *tick* 0.07))
+    (setf *tick* 0.06))
   ;; spawn new
   (setf (aref *sand* 0 (random *sand-width*))
         (list (aref *chars* (random (length *chars*)))
@@ -250,7 +251,7 @@
   ;; hunger
   (when (and (zerop (mod *time* 3)) (plusp *panel-food*))
     (decf *panel-food*))
-  (when (and (zerop *panel-food*) (zerop (mod *time* 5)))
+  (when (and (zerop *panel-food*) (zerop (mod *time* 3)))
     (decf *hp*))
   ;; thirst
   (when (and (oddp *time*) (plusp *panel-water*))
