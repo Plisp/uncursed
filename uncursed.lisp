@@ -4,7 +4,7 @@
   ((style :initform *default-style*
           :accessor cell-style
           :type style)
-   (string :initform (make-string 1 :initial-element #\space)
+   (string :initform (string #\space)
            :accessor cell-string
            :type simple-string
            :documentation "A grapheme cluster")))
@@ -48,15 +48,14 @@
                :type integer)
    (bounds :initarg :bounds
            :reader window-bounds-error-bounds
-           :type (cons integer integer))
+           :type (or (eql :line) (eql :column)))
    (window :initarg :window
            :reader window-bounds-error-window
            :type window))
   (:report (lambda (condition stream)
-             (format stream "~d is not in bounds [~d,~d] of ~a"
+             (format stream "~d is not a valid ~a for ~a"
                      (window-bounds-error-coordinate condition)
-                     (car (window-bounds-error-bounds condition))
-                     (cdr (window-bounds-error-bounds condition))
+                     (window-bounds-error-bounds condition)
                      (window-bounds-error-window condition))))
   (:documentation "Signaled if an attempt is made to index outside a window's bounds"))
 
@@ -68,7 +67,7 @@
    (buffer :initarg :buffer
            :reader wide-char-overwrite-error-buffer))
   (:report (lambda (condition stream)
-             (format stream "Coordinate intersects wide character: ~d,~d in ~a"
+             (format stream "Coordinate ~d,~d intersects wide character in ~a"
                      (wide-char-overwrite-error-y condition)
                      (wide-char-overwrite-error-x condition)
                      (wide-char-overwrite-error-buffer condition))))
@@ -95,16 +94,15 @@
         (width (character-width char)))
     (or (<= 1 line (rect-rows dimensions))
         (error 'window-bounds-error :coordinate line
-                                    :bounds (cons 1 (rect-rows dimensions))
+                                    :bounds :line
                                     :window put-window))
     (or (<= 1 col (- (rect-cols dimensions) (1- width)))
         (error 'window-bounds-error :coordinate col
-                                    :bounds (cons 1 (rect-cols dimensions))
+                                    :bounds :column
                                     :window put-window))
     (let* ((cell-y (+ (rect-y dimensions) (1- line)))
            (cell-x (+ (rect-x dimensions) (1- col)))
            (cell (aref put-buffer cell-y cell-x)))
-      (and style (setf (cell-style cell) (copy-style style)))
       (if (zerop width) ; this should not be common
           (let* ((string (cell-string cell))
                  (old-length (length string)))
@@ -122,7 +120,7 @@
                                                         :buffer put-buffer)
                     (overwrite-char ()
                       :report "Overwrite the wide character"
-                      (setf (cell-string prev) (make-string 1 :initial-element #\space)))
+                      (setf (cell-string prev) (string #\space)))
                     (ignore-put ()
                       :report "Do nothing"
                       (return-from put))))))
@@ -138,46 +136,100 @@
                     ;; [.][old][""] -> [new][""][ ] erases old character
                     (overwrite-char ()
                       :report "Overwrite the wide character"
-                      (setf (cell-string (aref put-buffer cell-y (+ 2 cell-x)))
-                            (make-string 1 :initial-element #\space)))
+                      (setf (cell-string (aref put-buffer cell-y (+ 2 cell-x))) (string #\space)))
                     (ignore-put ()
                       :report "Do nothing"
                       (return-from put))))
                 (setf (cell-string next) (make-string 0))))
             ;; finally write the character into its cell
-            (setf (cell-string cell) (make-string 1 :initial-element char)))))
+            (setf (cell-string cell) (string char))
+            (and style (setf (cell-style cell) (copy-style style))))))
     width))
 
 (defun puts (string line col &optional style (put-buffer *put-buffer*) (put-window *put-window*))
-  (let* ((char-widths (map 'vector #'character-width string))
-         (last-non-combining-char-pos (position-if-not #'zerop char-widths :from-end t)))
-    (or last-non-combining-char-pos
-        (loop :for char :across string ;all combining
-              :do (put char line col style put-buffer put-window)))
-    (let ((last-non-combining-char (char string last-non-combining-char-pos))
-          (last-non-combining-char-visual-offset
-            (reduce #'+ char-widths :end last-non-combining-char-pos))
-          (strlen (length string)))
-      ;; signal overwrite/out of bounds error for last character early, before we write the rest
-      (or (put last-non-combining-char
-               line (+ col last-non-combining-char-visual-offset)
-               style
-               put-buffer put-window)
-          ;; if IGNORE-PUT restart selected, abort here
-          (return-from puts))
-      ;; write trailing combining characters
-      (loop :for i :from (1+ last-non-combining-char-pos) :below strlen
-            :do (put (char string i)
-                     line (+ col last-non-combining-char-visual-offset)
-                     style
-                     put-buffer put-window))
-      ;; put the rest normally
-      (loop :for i :below last-non-combining-char-pos
-            :with next-col = col
-            :do (incf next-col (put (char string i)
-                                    line next-col
-                                    style
-                                    put-buffer put-window))))))
+  (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
+  (check-type put-buffer buffer)
+  (check-type put-window window)
+  (check-type string string)
+  (check-type style (or style null))
+  (let ((dimensions (dimensions put-window))
+        (string-display-width (display-width string))
+        (last-non-combining-char-pos (position-if-not #'zerop string :key #'character-width
+                                                                     :from-end t)))
+    (or (<= 1 line (rect-rows dimensions))
+        (error 'window-bounds-error :coordinate line
+                                    :bounds :line
+                                    :window put-window))
+    (or (plusp col)
+        (error 'window-bounds-error :coordinate col
+                                    :bounds :column
+                                    :window put-window))
+    (or (<= (+ (1- col) string-display-width) (rect-cols dimensions))
+        (error 'window-bounds-error :coordinate (+ (1- col) string-display-width)
+                                    :bounds :column
+                                    :window put-window))
+    (if last-non-combining-char-pos
+        (let* ((last-non-combining-char (char string last-non-combining-char-pos))
+               (last-non-combining-char-visual-offset
+                 (reduce #'+ string :key #'character-width :end last-non-combining-char-pos))
+               (first-non-combining-char-pos
+                 (position-if-not #'zerop string :key #'character-width))
+               (first-non-combining-char (char string first-non-combining-char-pos))
+               (first-cell-y (+ (rect-y dimensions) (1- line)))
+               (first-cell-x (+ (rect-x dimensions) (1- col)))
+               (first-cell (aref put-buffer first-cell-y first-cell-x))
+               first-overwrites-p)
+          ;; signal overwrite error for first character early, *not writing to the buffer*
+          (unless (zerop first-cell-x)
+            (let ((prev (aref put-buffer first-cell-y (1- first-cell-x))))
+              (when (wide-cell-p prev)
+                (restart-case
+                    (error 'wide-char-overwrite-error :y first-cell-y
+                                                      :x (1- first-cell-x)
+                                                      :buffer put-buffer)
+                  (overwrite-char ()
+                    :report "Overwrite the wide character"
+                    (setf first-overwrites-p prev))
+                  (ignore-put ()
+                    :report "Do nothing"
+                    (return-from puts))))))
+          ;; now attempt to put, allowing writing to the buffer since we've treated the first
+          ;; this may overwrite after the end of the string
+          (or (put last-non-combining-char
+                   line (+ col last-non-combining-char-visual-offset)
+                   style
+                   put-buffer put-window)
+              ;; if IGNORE-PUT restart selected, abort here, before anything is written
+              (return-from puts))
+          ;; write first character after we've ascertained that the caller doesn't want to abort
+          ;; via IGNORE-PUT. Also overwrite if restart was selected earlier
+          (unless (= first-non-combining-char-pos last-non-combining-char-pos)
+            (when first-overwrites-p
+              (setf (cell-string first-overwrites-p) (string #\space)))
+            (setf (cell-string first-cell) (string first-non-combining-char))
+            (and style (setf (cell-style first-cell) (copy-style style))))
+          ;; put the rest normally, overwriting any previous contents unconditionally
+          ;; TODO combining characters after first non combining char may be misplaced
+          ;; leading combining characters are *discarded* (combining characters should follow)
+          (loop :for i :from (1+ first-non-combining-char-pos) :below last-non-combining-char-pos
+                :with next-col = (+ col (character-width first-non-combining-char))
+                :do (incf next-col (handler-bind ((wide-char-overwrite-error
+                                                    (lambda (e)
+                                                      (declare (ignore e))
+                                                      (invoke-restart 'overwrite-char))))
+                                     (put (char string i)
+                                          line next-col
+                                          style
+                                          put-buffer put-window))))
+          ;; write trailing combining characters
+          (loop :for i :from (1+ last-non-combining-char-pos) :below (length string)
+                :do (put (char string i)
+                         line (+ col last-non-combining-char-visual-offset)
+                         style
+                         put-buffer put-window)))
+        ;; all combining characters, all fit at the index
+        (loop :for char :across string
+              :do (put char line col style put-buffer put-window)))))
 
 (defun put-style (style rect &optional (put-buffer *put-buffer*) (put-window *put-window*))
   (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
@@ -189,19 +241,19 @@
     ;; TODO not the most informative errors?
     (or (<= 0 (rect-y rect))
         (error 'window-bounds-error :coordinate (rect-y rect)
-                                    :bounds (cons 0 (rect-rows dimensions))
+                                    :bounds :line
                                     :window put-window))
     (or (<= (+ (rect-y rect) (rect-rows rect)) (rect-rows dimensions))
         (error 'window-bounds-error :coordinate (+ (rect-y rect) (rect-rows rect))
-                                    :bounds (cons 0 (rect-rows dimensions))
+                                    :bounds :line
                                     :window put-window))
     (or (<= 0 (rect-x rect))
         (error 'window-bounds-error :coordinate (rect-x rect)
-                                    :bounds (cons 0 (rect-cols dimensions))
+                                    :bounds :column
                                     :window put-window))
     (or (<= (+ (rect-x rect) (rect-cols rect)) (rect-cols dimensions))
         (error 'window-bounds-error :coordinate (+ (rect-x rect) (rect-cols rect))
-                                    :bounds (cons 0 (rect-cols dimensions))
+                                    :bounds :column
                                     :window put-window))
     (loop :with style = (copy-style style) ; to prevent mutability shenanigans
           :repeat (rect-rows rect)
@@ -229,7 +281,7 @@
   (let ((*put-window* window))
     (call-next-method)))
 
-(defmethod handle-resize ((tui tui))
+(defmethod handle-resize :before ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen)
                    (lines lines)
