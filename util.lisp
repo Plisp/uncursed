@@ -73,6 +73,7 @@ backing FD. Returns NIL on failure."
   (fd :int)
   (optional-actions :int)
   (termios-p (:pointer (:struct c-termios))))
+
 (defun setup-terminal (fd)
   "Disables terminal echoing and buffering and enables mouse mode 1003.
 Returns a pointer to the original termios. Sets process locale to environment."
@@ -306,7 +307,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   "NEW-VALUE is a (LINE . COLUMN) pair"
   (ti:tputs ti:cursor-address line column))
 
-(defun set-mouse-shape (style &key blink-p)
+(defun set-cursor-shape (style &key blink-p)
   (if (eq style :invisible)
       (ti:tputs ti:cursor-invisible)
       (let ((arg (case style

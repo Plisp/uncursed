@@ -17,6 +17,10 @@
 (defclass game-ui (tui:tui)
   ())
 
+(defmethod tui:run :before ((tui game-ui))
+  (tui:enable-alternate-screen)
+  (tui:set-cursor-shape :invisible))
+
 (defmethod tui:handle-resize ((tui game-ui))
   (when (or (< (tui:columns tui) *tui-width*) (< (tui:lines tui) 30))
     (dotimes (i 10)

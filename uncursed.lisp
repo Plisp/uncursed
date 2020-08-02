@@ -1,10 +1,12 @@
 (in-package :uncursed)
 
 (defclass cell ()
-  ((style :initform *default-style*
+  ((style :initarg :style
+          :initform *default-style*
           :accessor cell-style
           :type style)
-   (string :initform (string #\space)
+   (string :initarg :string
+           :initform (string #\space)
            :accessor cell-string
            :type simple-string
            :documentation "A grapheme cluster")))
@@ -302,12 +304,21 @@
                       :do (setf (aref canvas line column) (make-instance 'cell)
                                 (aref screen line column) (make-instance 'cell)))))))
 
+(defmethod redisplay :around ((tui tui))
+  ;; clear canvas of any junk from last time before drawing
+  (loop :with canvas = (canvas tui)
+        :for idx :below (array-total-size canvas)
+        :do (setf (row-major-aref canvas idx) (make-instance 'cell)))
+  (call-next-method)) ; TODO not the best, maybe use most-specific-first?
+
 (defmethod redisplay ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen))
       tui
+    ;; present windows
     (let ((*put-buffer* canvas))
       (map () #'present (windows tui)))
+    ;; render diff to terminal
     (set-style *default-style*)
     (loop :with diff = (buffer-diff screen canvas)
           :with current-style = *default-style*
@@ -324,9 +335,7 @@
               (setf last-pos pos
                     last-width (display-width (cell-string cell)))
           :finally (force-output)
-                   (rotatef screen canvas)
-                   (loop :for idx :below (array-total-size canvas)
-                         :do (setf (row-major-aref canvas idx) (make-instance 'cell))))))
+                   (rotatef screen canvas))))
 
 (defun dispatch-mouse-event (window tui event)
   (destructuring-bind (type button col line . controlp) event
@@ -375,10 +384,8 @@ either the next timer expiry interval or NIL, meaning to cancel the timer.")
     (loop :for idx :below (array-total-size canvas)
           :do (setf (row-major-aref canvas idx) (make-instance 'cell)
                     (row-major-aref screen idx) (make-instance 'cell)))
-    (enable-alternate-screen)
-    (set-mouse-shape :invisible)
-    (enable-mouse)
     (clear-screen)
+    (enable-mouse)
     (catch-sigwinch)
     (unwind-protect
          (catch 'tui-quit
@@ -419,8 +426,9 @@ either the next timer expiry interval or NIL, meaning to cancel the timer.")
                          (setf (timer-interval next-timer) next-interval)
                          (schedule-timer tui next-timer))))))))
       (disable-mouse)
-      (set-mouse-shape :block)
+      (set-cursor-shape :block)
       (disable-alternate-screen)
+      (loop :while (read-event-timeout 0)) ; drain events
       (reset-sigwinch)
       (finish-output))))
 

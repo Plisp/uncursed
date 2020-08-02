@@ -17,6 +17,10 @@
    (draw-style :initform (tui:make-style :fg #xff0000 :bg #xff0000)
                :accessor draw-style)))
 
+(defmethod tui:run :before ((tui paint-ui))
+  (tui:enable-alternate-screen)
+  (tui:set-cursor-shape :invisible))
+
 (defun tui-handle-event (tui ev)
   (cond ((and (characterp ev) (char= ev #\etb))
          (tui:stop tui))))

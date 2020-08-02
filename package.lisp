@@ -27,7 +27,7 @@
            #:enable-alternate-screen #:disable-alternate-screen
            #:clear-screen #:clear-to-end-of-line #:clear-chars
            #:set-cursor-position
-           #:set-mouse-shape
+           #:set-cursor-shape
            #:set-foreground #:set-background
            #:set-style #:set-style-from-old
            #:read-event
@@ -52,7 +52,6 @@
            #:dimensions
            #:win-focused-p
            #:present
-
 
            ))
 
