@@ -9,8 +9,7 @@
                     #+(or sbcl ecl) (list :synchronized t)
                     #+ccl nil)))
   (defun character-width (character)
-    "Returns the displayed width of CHARACTER and its string representation as multiple
-values."
+    "Returns the displayed width of CHARACTER"
     (declare (optimize speed))
     (let* ((codepoint (char-code character))
            (result (gethash codepoint cache)))
@@ -325,6 +324,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   (bg nil :type (or null (integer #x000000 #xffffff)))
   (boldp nil :type boolean)
   (italicp nil :type boolean)
+  (reversep nil :type boolean)
   (underlinep nil :type boolean))
 
 (defun red (color) (ldb (byte 8 16) color))
@@ -353,6 +353,8 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
       (setf (getf differences :bold) (boldp b)))
     (unless (eq (italicp a) (italicp b))
       (setf (getf differences :italic) (italicp b)))
+    (unless (eq (reversep a) (reversep b))
+      (setf (getf differences :reverse) (reversep b)))
     (unless (eq (underlinep a) (underlinep b))
       (setf (getf differences :underline) (underlinep b)))
     differences))
@@ -371,6 +373,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                         (format nil "49;")))
                (:bold (if attr "1;" "22;"))
                (:italic (if attr "3;" "23;"))
+               (:reverse (if attr "7;" "27;"))
                (:underline (if attr "4;" "24;"))
                (otherwise ""))))
       (let ((s (with-output-to-string (s)
@@ -381,7 +384,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
         (write-string s *terminal-io*)))))
 
 (defun set-style (style)
-  (format *terminal-io* "~c[0m" #\esc) ; probably not the most portable
+  (ti:tputs ti:exit-attribute-mode)
   (set-style-from-old *default-style* style))
 
 (defun set-foreground (r g b)
@@ -390,19 +393,8 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
 (defun set-background (r g b)
   (format *terminal-io* "~c[48;2;~d;~d;~dm" #\esc r g b))
 
-;; layouting utilities
-
 (defstruct (rectangle (:conc-name rect-))
   (x (error "rectangle X not provided") :type fixnum)
   (y (error "rectangle Y not provided") :type fixnum)
   (rows (error "rectangle ROWS not provided") :type fixnum)
   (cols (error "rectangle COLS not provided") :type fixnum))
-
-;; '(:v
-;;   window 0.3
-;;   (:h split1 0.5 split2)
-;;   another-window)
-
-;; (defun layout (spec)
-;;   (labels ((recur (spec )
-;;              ()))))

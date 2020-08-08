@@ -10,5 +10,4 @@
                (:cffi-grovel-file "grovel")
                (:file "condition")
                (:file "util")
-               (:file "uncursed-base")
                (:file "uncursed")))

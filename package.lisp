@@ -9,7 +9,7 @@
 
            #:style
            #:make-style #:copy-style
-           #:fg #:bg #:boldp #:italicp #:underlinep
+           #:fg #:bg #:boldp #:italicp #:reversep #:underlinep
            #:style-difference
            #:*default-style*
 
@@ -36,8 +36,12 @@
 
            #:catch-sigwinch
            #:reset-sigwinch
+           ))
 
-           #:tui-base
+(defpackage :uncursed
+  (:use :cl :uncursed-sys)
+  (:local-nicknames (:sys :uncursed-sys))
+  (:export #:tui-base
            ;; methods
            #:lines #:columns
            #:windows
@@ -53,16 +57,15 @@
            #:win-focused-p
            #:present
 
-           ))
-
-(defpackage :uncursed
-  (:use :cl :uncursed-sys)
-  (:export #:cell
+           #:cell
            ;; methods
            #:cell-style
            #:cell-string
 
            #:make-timer
+           ;; methods
+           #:timer-callback
+           #:timer-interval
 
            #:tui
            ;; methods
