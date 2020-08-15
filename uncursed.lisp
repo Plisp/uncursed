@@ -155,8 +155,10 @@ May only be called from within the dynamic-extent of a call to RUN."))
 (defvar *put-buffer*)
 (defvar *put-window*)
 
+;; note that triple-width is rare enough (e.g. three-em-dash) and terminal support is
+;; so lacking that we don't care
 (defun put (char line col &optional style (put-buffer *put-buffer*) (put-window *put-window*))
-  (declare (optimize speed)
+  (declare (optimize safety debug)
            (type (simple-array cell) put-buffer))
   (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
   (check-type put-buffer buffer)
@@ -170,7 +172,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
                :coordinate line
                :bounds :line
                :window put-window))
-    (or (<= 1 col (- (rect-cols dimensions) (1- width)))
+    (or (<= 1 col (- (rect-cols dimensions) (max 0 (1- width))))
         (error 'window-bounds-error
                :coordinate col
                :bounds :column
@@ -252,9 +254,9 @@ May only be called from within the dynamic-extent of a call to RUN."))
     (if last-non-combining-char-pos
         (let* ((last-non-combining-char (char string last-non-combining-char-pos))
                (last-non-combining-char-visual-offset
-                (reduce #'+ string :key #'character-width :end last-non-combining-char-pos))
+                 (reduce #'+ string :key #'character-width :end last-non-combining-char-pos))
                (first-non-combining-char-pos
-                (position-if-not #'zerop string :key #'character-width))
+                 (position-if-not #'zerop string :key #'character-width))
                (first-non-combining-char (char string first-non-combining-char-pos))
                (first-cell-y (+ (rect-y dimensions) (1- line)))
                (first-cell-x (+ (rect-x dimensions) (1- col)))
@@ -296,9 +298,9 @@ May only be called from within the dynamic-extent of a call to RUN."))
           (loop :for i :from (1+ first-non-combining-char-pos) :below last-non-combining-char-pos
                 :with next-col = (+ col (character-width first-non-combining-char))
                 :do (incf next-col (handler-bind ((wide-char-overwrite-error
-                                                   (lambda (e)
-                                                     (declare (ignore e))
-                                                     (invoke-restart 'overwrite-char))))
+                                                    (lambda (e)
+                                                      (declare (ignore e))
+                                                      (invoke-restart 'overwrite-char))))
                                      (put (char string i)
                                           line next-col
                                           style
@@ -311,7 +313,8 @@ May only be called from within the dynamic-extent of a call to RUN."))
                          put-buffer put-window)))
         ;; all combining characters, all fit at the index
         (loop :for char :across string
-              :do (put char line col style put-buffer put-window)))))
+              :do (put char line col style put-buffer put-window)))
+    string-display-width))
 
 (defun put-style (style rect &optional (put-buffer *put-buffer*) (put-window *put-window*))
   (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
@@ -393,7 +396,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
   (loop :with canvas = (canvas tui)
         :for idx :below (array-total-size canvas)
         :do (setf (row-major-aref canvas idx) (make-instance 'cell)))
-  (call-next-method)) ; TODO not the best, maybe use most-specific-first?
+  (call-next-method))
 
 (defmethod redisplay ((tui tui))
   (with-accessors ((canvas canvas)
@@ -409,17 +412,19 @@ May only be called from within the dynamic-extent of a call to RUN."))
           :with last-pos
           :with last-width
           :for (cell . pos) :across diff
-          :do (or (and last-width last-pos
-                       (= (car pos) (car last-pos))
-                       (= (cdr pos) (+ (cdr last-pos) last-width)))
-                  (set-cursor-position (car pos) (cdr pos)))
-              (set-style-from-old current-style (cell-style cell))
-              (setf current-style (cell-style cell))
-              (write-string (cell-string cell))
-              (setf last-pos pos
-                    last-width (display-width (cell-string cell)))
-          :finally (force-output)
-                   (rotatef screen canvas))))
+          :do (let ((cell-width (display-width (cell-string cell))))
+                (or (and last-width last-pos
+                         (= (car pos) (car last-pos))
+                         (= (cdr pos) (+ (cdr last-pos) last-width)))
+                    (set-cursor-position (car pos) (cdr pos)))
+                (set-style-from-old current-style (cell-style cell))
+                (setf current-style (cell-style cell))
+                (write-string (cell-string cell))
+                (setf last-pos pos
+                      last-width cell-width))
+          :finally (force-output))
+    ;; swap buffers
+    (rotatef screen canvas)))
 
 (defun dispatch-mouse-event (window tui event)
   (destructuring-bind (type button col line . controlp) event
@@ -474,41 +479,41 @@ either the next timer expiry interval or NIL, meaning to cancel the timer.")
     (unwind-protect
          (catch 'tui-quit
            (loop
-              (redisplay tui)
-              (let* ((before-read (get-internal-real-time))
-                     (next-timer (pop timers))
-                     (next-timeout (when next-timer (timer-interval next-timer)))
-                     (event (if next-timer
-                                (read-event-timeout next-timeout)
-                                (read-event))))
-                (when (got-winch tui)
-                  (handle-resize tui))
-                (if event
-                    ;; serve the event to one window, or the TUI catchall
-                    (let ((now (get-internal-real-time)))
-                      (push next-timer timers)
-                      (map () #'(lambda (timer)
-                                  (when timer ;TIMER=NIL?
-                                    (setf (timer-interval timer)
-                                          (max (- (timer-interval timer)
-                                                  (/ (- now before-read)
-                                                     internal-time-units-per-second))
-                                               0))))
-                           timers)
-                      (or (if (mouse-event-p event)
-                              (loop :for window :in (copy-list (windows tui))
-                                    :thereis (dispatch-mouse-event window tui event))
-                              (handle-key-event focused-window tui event))
-                          (funcall event-handler tui event)))
-                    ;; process expired timer
-                    (progn
-                      (map () #'(lambda (timer)
-                                  (decf (timer-interval timer) next-timeout))
-                           timers)
-                      (let ((next-interval (funcall (timer-callback next-timer) tui)))
-                        (when next-interval
-                          (setf (timer-interval next-timer) next-interval)
-                          (schedule-timer tui next-timer))))))))
+             (redisplay tui)
+             (let* ((before-read (get-internal-real-time))
+                    (next-timer (pop timers))
+                    (next-timeout (when next-timer (timer-interval next-timer)))
+                    (event (if next-timer
+                               (read-event-timeout next-timeout)
+                               (read-event))))
+               (when (got-winch tui)
+                 (handle-resize tui))
+               (if event
+                   ;; serve the event to one window, or the TUI catchall
+                   (let ((now (get-internal-real-time)))
+                     (push next-timer timers)
+                     (map () #'(lambda (timer)
+                                 (when timer ;TIMER=NIL?
+                                   (setf (timer-interval timer)
+                                         (max (- (timer-interval timer)
+                                                 (/ (- now before-read)
+                                                    internal-time-units-per-second))
+                                              0))))
+                          timers)
+                     (or (if (mouse-event-p event)
+                             (loop :for window :in (copy-list (windows tui))
+                                     :thereis (dispatch-mouse-event window tui event))
+                             (handle-key-event focused-window tui event))
+                         (funcall event-handler tui event)))
+                   ;; process expired timer
+                   (progn
+                     (map () #'(lambda (timer)
+                                 (decf (timer-interval timer) next-timeout))
+                          timers)
+                     (let ((next-interval (funcall (timer-callback next-timer) tui)))
+                       (when next-interval
+                         (setf (timer-interval next-timer) next-interval)
+                         (schedule-timer tui next-timer))))))))
       (disable-mouse)
       (set-cursor-shape :block)
       (disable-alternate-screen)

@@ -18,7 +18,7 @@
            #:rect-x #:rect-y #:rect-rows #:rect-cols
 
            ;; util.lisp
-           #:character-width
+           #:character-width #:*character-widths*
            #:display-width
            #:setup-terminal
            #:restore-terminal

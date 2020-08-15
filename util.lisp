@@ -4,18 +4,25 @@
 
 (in-package :uncursed-sys)
 
-;; EQL is fine for integers
-(let ((cache (apply #'make-hash-table
-                    #+(or sbcl ecl) (list :synchronized t)
-                    #+ccl nil)))
-  (defun character-width (character)
-    "Returns the displayed width of CHARACTER"
-    (declare (optimize speed))
-    (let* ((codepoint (char-code character))
-           (result (gethash codepoint cache)))
-      (or result
-          (setf (gethash codepoint cache)
-                (cffi:foreign-funcall "wcwidth" c-wchar codepoint :int))))))
+(defparameter *character-widths*
+  (apply #'make-hash-table
+         #+(or sbcl ecl) (list :synchronized t)
+         #+ccl nil))
+
+(eval-when (:execute)
+  ;;(setf (gethash (char-code #\⸻) *character-widths*) 3)
+  )
+
+(defun character-width (character)
+  "Returns the displayed width of CHARACTER"
+  (declare (optimize speed))
+  (let* ((codepoint (char-code character))
+         (result (gethash codepoint *character-widths*)))
+    (or result
+        (setf (gethash codepoint *character-widths*)
+              (if (not (zerop codepoint)) ; #\null
+                  (cffi:foreign-funcall "wcwidth" c-wchar codepoint :int)
+                  -1)))))
 
 (defun display-width (string)
   "Good enough"

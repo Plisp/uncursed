@@ -9,4 +9,4 @@ n.b. `sand-game.lisp` features the color/timer functionality of the library and 
 - [x] unicode support
 - [ ] more comprehensive input handling
 - [x] timers
-- [ ] plist layouting/resizing (or leave it up to the application?)
+- [ ] widgets
