@@ -259,7 +259,9 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   ;;                                         (setf event (read-event stream))))
   ;;         (serve-event:serve-event timeout))
   #-(or sbcl ccl ecl)
-  (when timeout (error "timeout not supported"))
+  (if timeout
+      (error "timeout not supported")
+      (read-event stream))
   )
 
 ;;; sigwinch

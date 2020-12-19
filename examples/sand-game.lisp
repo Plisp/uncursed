@@ -107,7 +107,7 @@
               3 1
               (tui:make-style :fg (car *panel-color*) :boldp t))
     (maybe-rainbow)
-    (tui:puts (format nil "┃ Sc0re: ~4d                                    ┃" *score*)
+    (tui:puts (format nil "┃ Sc0re͇: ~4d                                    ┃" *score*)
               4 1
               (tui:make-style :fg (car *panel-color*) :boldp t))
     ;; border

@@ -89,6 +89,7 @@
                                   (tui:rect-cols (tui:dimensions
                                                   (tui:window-bounds-error-window e))))
                            (return-from draw)))))
+        ;; don't do this. I'm only using tui:put outside PRESENT here since the canvas = data
         (tui:put (draw-char *paint-ui*)
                  line col
                  (draw-style *paint-ui*)

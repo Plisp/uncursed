@@ -70,14 +70,24 @@ May only be called from within the dynamic-extent of a call to RUN."))
 
 (defclass cell ()
   ((%style :initarg :style
-           :initform *default-style*
-           :accessor cell-style
+           :initform (copy-style *default-style*)
+           :reader cell-style
            :type style)
    (%string :initarg :string
             :initform (string #\space)
             :accessor cell-string
             :type simple-string
-            :documentation "A grapheme cluster")))
+            :documentation "Represents a grapheme cluster and its display style.
+Note that setf-ing the style copies over the new attributes into the existing cell-style.")))
+
+(defmethod (setf cell-style) (new-value (cell cell))
+  (let ((style (cell-style cell)))
+    (setf (fg style) (fg new-value)
+          (bg style) (bg new-value)
+          (boldp style) (boldp new-value)
+          (italicp style) (italicp new-value)
+          (reversep style) (reversep new-value)
+          (underlinep style) (underlinep new-value))))
 
 (defmethod print-object ((cell cell) stream)
   (format stream "#<cell string:~a style:~a>" (cell-string cell) (cell-style cell)))
@@ -156,7 +166,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
 (defvar *put-window*)
 
 ;; note that triple-width is rare enough (e.g. three-em-dash) and terminal support is
-;; so lacking that we don't care
+;; so lacking that there's no point supporting it
 (defun put (char line col &optional style (put-buffer *put-buffer*) (put-window *put-window*))
   (declare (optimize safety debug)
            (type (simple-array cell) put-buffer))
@@ -222,7 +232,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
                 (setf (cell-string next) (make-string 0))))
             ;; finally write the character into its cell
             (setf (cell-string cell) (string char))
-            (and style (setf (cell-style cell) (copy-style style))))))
+            (and style (setf (cell-style cell) style)))))
     width))
 
 (defun puts (string line col &optional style (put-buffer *put-buffer*) (put-window *put-window*))
@@ -261,7 +271,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
                (first-cell-y (+ (rect-y dimensions) (1- line)))
                (first-cell-x (+ (rect-x dimensions) (1- col)))
                (first-cell (aref put-buffer first-cell-y first-cell-x))
-               first-overwrites-p)
+               first-to-overwrite)
           ;; signal overwrite error for first character early, *not writing to the buffer*
           (unless (zerop first-cell-x)
             (let ((prev (aref put-buffer first-cell-y (1- first-cell-x))))
@@ -273,11 +283,11 @@ May only be called from within the dynamic-extent of a call to RUN."))
                            :buffer put-buffer)
                   (overwrite-char ()
                     :report "Overwrite the wide character"
-                    (setf first-overwrites-p prev))
+                    (setf first-to-overwrite prev))
                   (ignore-put ()
                     :report "Do nothing"
                     (return-from puts))))))
-          ;; now attempt to put, allowing writing to the buffer since we've treated the first
+          ;; now attempt to put, allowing writing to the buffer since we've treated the first char
           ;; this may overwrite after the end of the string
           (or (put last-non-combining-char
                    line (+ col last-non-combining-char-visual-offset)
@@ -286,25 +296,27 @@ May only be called from within the dynamic-extent of a call to RUN."))
               ;; if IGNORE-PUT restart selected, abort here, before anything is written
               (return-from puts))
           ;; write first character after we've ascertained that the caller doesn't want to abort
-          ;; via IGNORE-PUT. Also overwrite if restart was selected earlier
+          ;; via IGNORE-PUT. Also perform overwrite for first char if restart was selected earlier
           (unless (= first-non-combining-char-pos last-non-combining-char-pos)
-            (when first-overwrites-p
-              (setf (cell-string first-overwrites-p) (string #\space)))
             (setf (cell-string first-cell) (string first-non-combining-char))
-            (and style (setf (cell-style first-cell) (copy-style style))))
+            (and style (setf (cell-style first-cell) style))
+            (when first-to-overwrite
+              (setf (cell-string first-to-overwrite) (string #\space))))
           ;; put the rest normally, overwriting any previous contents unconditionally
-          ;; TODO combining characters after first non combining char may be misplaced
-          ;; leading combining characters are *discarded* (combining characters should follow)
-          (loop :for i :from (1+ first-non-combining-char-pos) :below last-non-combining-char-pos
-                :with next-col = (+ col (character-width first-non-combining-char))
-                :do (incf next-col (handler-bind ((wide-char-overwrite-error
-                                                    (lambda (e)
-                                                      (declare (ignore e))
-                                                      (invoke-restart 'overwrite-char))))
-                                     (put (char string i)
-                                          line next-col
-                                          style
-                                          put-buffer put-window))))
+          ;; leading combining characters are *discarded* (this is probably correct behavior?)
+          (loop :with put-col = col
+                :with last-width = (character-width first-non-combining-char)
+                :for i :from (1+ first-non-combining-char-pos) :below last-non-combining-char-pos
+                :for char = (char string i)
+                :do (let ((width (character-width char)))
+                      (when (plusp width)
+                        (incf put-col last-width)
+                        (setf last-width width)))
+                    (handler-bind ((wide-char-overwrite-error
+                                     (lambda (e)
+                                       (declare (ignore e))
+                                       (invoke-restart 'overwrite-char))))
+                      (put char line put-col style put-buffer put-window)))
           ;; write trailing combining characters
           (loop :for i :from (1+ last-non-combining-char-pos) :below (length string)
                 :do (put (char string i)
@@ -344,8 +356,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
                :coordinate (+ (rect-x rect) (rect-cols rect))
                :bounds :column
                :window put-window))
-    (loop :with style = (copy-style style) ; to prevent mutability shenanigans
-          :repeat (rect-rows rect)
+    (loop :repeat (rect-rows rect)
           :for y :from (+ (rect-y dimensions) (rect-y rect))
           :do (loop :repeat (rect-cols rect)
                     :for x :from (+ (rect-x dimensions) (rect-x rect))
@@ -453,7 +464,7 @@ either the next timer expiry interval or NIL, meaning to cancel the timer.")
         (callback (timer-callback timer)))
     (check-type callback function)
     (check-type interval (real 0))
-    (push timer (timers tui)) ; TODO maybe do this better
+    (push timer (timers tui)) ; TODO maybe use a heap if needed
     (setf (timers tui) (stable-sort (timers tui) #'< :key #'timer-interval))))
 
 (defmethod unschedule-timer ((tui tui) timer)
@@ -500,9 +511,10 @@ either the next timer expiry interval or NIL, meaning to cancel the timer.")
                                                     internal-time-units-per-second))
                                               0))))
                           timers)
+                     ;; TODO mechanism for closing windows and creating them during event handling
                      (or (if (mouse-event-p event)
                              (loop :for window :in (copy-list (windows tui))
-                                     :thereis (dispatch-mouse-event window tui event))
+                                   :thereis (dispatch-mouse-event window tui event))
                              (handle-key-event focused-window tui event))
                          (funcall event-handler tui event)))
                    ;; process expired timer
