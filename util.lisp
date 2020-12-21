@@ -10,6 +10,9 @@
          #+ccl nil))
 
 (eval-when (:execute)
+  ;; add exceptions here
+  ()
+  ;; only alacritty works correctly, so support doesn't seem necessary in the near future
   ;;(setf (gethash (char-code #\⸻) *character-widths*) 3)
   )
 
@@ -69,6 +72,12 @@ backing FD. Returns NIL on failure."
 (defun disable-mouse ()
   (format *terminal-io* "~c[?1006l~c[?1003l" #\esc #\esc))
 
+(defun enable-focus-tracking ()
+  (format *terminal-io* "~c[?1004h" #\esc))
+
+(defun disable-focus-tracking ()
+  (format *terminal-io* "~c[?1004l" #\esc))
+
 ;; setup
 
 (cffi:defcfun "tcgetattr" :int
@@ -81,8 +90,8 @@ backing FD. Returns NIL on failure."
   (termios-p (:pointer (:struct c-termios))))
 
 (defun setup-terminal (fd)
-  "Disables terminal echoing and buffering and enables mouse mode 1003.
-Returns a pointer to the original termios. Sets process locale to environment."
+  "Disables terminal echoing and buffering. Returns a pointer to the original termios.
+Sets process locale from environment."
   (cffi:with-foreign-string (s "")
     (cffi:foreign-funcall "setlocale" :int c-lc-ctype :string s :pointer))
   (let ((old-termios (cffi:foreign-alloc '(:struct c-termios))))
@@ -118,133 +127,198 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   (cffi:foreign-free old-termios)
   (values))
 
-;; taken from acute-terminal-control READ-EVENT TODO rewrite
-(symbol-macrolet ((read (read-char *standard-input* nil))) ;As we already know, xterm is very poorly and barely designed.
-  (defun read-event (&optional (stream *terminal-io*)
-                     &aux (*terminal-io* stream) (first read) second third)
-    (block nil
-      ;;Xterm likes to make its own standards for things, even when standards already exist.
-      ;;This tested the eighth bit for the Meta key.
-      ;;In a way, this arguably violated the character-set agnosticism, but not truly, I suppose.
-      ;;In any case, I'll instead implement the escape-prefixing nonsense.  It couldn't be simple, no.
-      ;;(if (logbitp 7 (char-code first))
-      ;;    (return (cons :meta (code-char (ldb (byte 7 0) (char-code first))))))
-      ;;This permits Escape being its own key without first needing more input.
-      ;;Of course, this violates the principle that input should be waited on, but it seems no one cares about that.
-      ;;So, you must send at least the first three characters of a control sequence at once for it to be recognized.
-      (or (listen) (return first))
-      (setq second read)
-      ;;This implements the silly Meta key convention that prefixes with escape.
-      ;;I must perform a trick to see if it's part of a control function or not.
-      (if (eql #.(code-char #x1B) first)
-          (if (or (eql #.(code-char #x5B) second)
-                  (eql #.(code-char #x4F) second))
-              (or (listen) (return (cons :meta second)))
-              (return (cons :meta second))))
-      (and (eql #.(code-char #x1B) first) ;;Xterm then likes to implement real standards incorrectly.
-           (eql #.(code-char #x4F) second) ;;Why use FUNCTION KEY when you can use SS3?
-           (setq third read)
-           ;;Here's the pattern xterm uses for function keys one through twelve:
-           ;;SS3 P     SS3 Q     SS3 R     SS3 S
-           ;;CSI 1 5 ~ CSI 1 7 ~ CSI 1 8 ~ CSI 1 9 ~
-           ;;CSI 2 0 ~ CSI 2 1 ~ CSI 2 3 ~ CSI 2 4 ~
-           ;;Simplicity at its finest, you see.
-           ;;With any luck, this garbage can be removed soon.
-           (return (and (<= #x50 (char-code third) #x53)
-                        (cons :function (- (char-code third) #x4F)))))
-      (and (eql #.(code-char #x1B) first)
-           (eql #.(code-char #x5B) second)
-           (setq third read)
-           (return (cond ((char= third #.(code-char #x41)) :up)
-                         ((char= third #.(code-char #x42)) :down)
-                         ((char= third #.(code-char #x43)) :right)
-                         ((char= third #.(code-char #x44)) :left)
-                         ((char= third #.(code-char #x4D)) ;xterm X10 mouse reporting
-                          (let ((first (- (char-code (or read (return))) 32))
-                                (second (- (char-code (or read (return))) 32)))
-                            (ignore-errors ;whoever designed this protocol should be executed ;) agreed
-                             (list* :click
-                                    (mod (1+ (char-code (or read (return)))) 4)
-                                    (if (> first 223) (return) first)
-                                    (if (> second 223) (return) second)))))
-                         ((char= third #.(code-char #x3C)) ;xterm SGR mouse reporting
-                          (let* ((first (loop for c = read do (or c (return))
-                                              until (char= c #.(code-char #x3B))
-                                              do (if (or (char= c #.(code-char #x4D)) (char= c #.(code-char #x6D)))
-                                                     (progn (unread-char c) (loop-finish)))
-                                              do (or (char= c #.(code-char #x00)) (<= #x30 (char-code c) #x39) (return))
-                                              collect c))
-                                 (second (loop for c = read do (or c (return))
-                                               until (char= c #.(code-char #x3B))
-                                               do (if (or (char= c #.(code-char #x4D)) (char= c #.(code-char #x6D)))
-                                                      (progn (unread-char c) (loop-finish)))
-                                               do (or (char= c #.(code-char #x00)) (<= #x30 (char-code c) #x39) (return))
-                                               collect c))
-                                 (release)
-                                 (third (loop named loop
-                                              for c = read do (or c (return-from loop))
-                                              until (char= c #.(code-char #x3B))
-                                              do (if (char= c #.(code-char #x4D)) (loop-finish))
-                                              do (when (char= c #.(code-char #x6D))
-                                                   (setq release :release)
-                                                   (loop-finish)) ;ignore mouse releases
-                                              do (or (char= c #.(code-char #x00)) (<= #x30 (char-code c) #x39) (return-from loop))
-                                              collect c))
-                                 (first-default #.(make-string 1 :initial-element #.(code-char #x30)))
-                                 (default #.(make-string 1 :initial-element #.(code-char #x31))))
-                            (setq first (or (and first (make-array (length first) :element-type 'character :initial-contents first)) first-default)
-                                  first (parse-integer first)
-                                  second (or (and second (make-array (length second) :element-type 'character :initial-contents second)) default)
-                                  third (or (and third (make-array (length third) :element-type 'character :initial-contents third)) default))
-                            (list* (or release
-                                       (case first
-                                         (0 :click) (1 :click) (2 :click)
-                                         (32 :drag) (34 :drag)
-                                         (35 :hover) (51 :hover)
-                                         (64 :scroll-up)
-                                         (65 :scroll-down)
-                                         (66 :scroll-left)
-                                         (67 :scroll-right)))
-                                   (ldb (byte 2 0) (1+ (if (> first 32) (- first 32) first)))
-                                   (parse-integer second)
-                                   (parse-integer third)
-                                   (unless (zerop (ldb (byte 1 4) first)) :control))))
-                         ;;Now, if the sequences sent were sane, I wouldn't even need this COND.
-                         ;;Xterm sends CONTROL SEQUENCE INTRODUCER, but with characters other than parameters immediately following it.
-                         ;;Instead, I need a different case for each and then I can do the parsing, which is still followed by other identifying characters.
-                         ;;So, this could've been a beautiful function, I think, but the horrible design of xterm prevented that.
-                         (t (let ((integer (parse-integer
-                                            (coerce (cons third
-                                                          (loop for char = read do (or char (return))
-                                                                do (if (or (char= char #.(code-char #x20)) (char= char #.(code-char #x7E)))
-                                                                       (progn (unread-char char) (loop-finish)))
-                                                                do (or (char= char #.(code-char #x00)) (<= #x30 (char-code char) #x39) (return))
-                                                                if (char/= char #.(code-char #x00)) collect char))
-                                                    'string))))
-                              (if (char= read #.(code-char #x7E)) ;This is the stupid convention that doesn't scale to infinity.
-                                  (let ((function-key (case integer (11 1) (12 2) (13 3) (14 4) (15 5) (17 6) (18 7) (19 8) (20 9) (21 10)
-                                                            (23 11) (24 12) (25 13) (26 14) (28 15) (29 16) (31 17) (32 18) (33 19) (34 20))))
-                                    (if function-key ; ugh
-                                        (cons :function function-key)
-                                        (case integer (5 :page-up) (6 :page-down))))
-                                  (if (and (char= read #.(code-char #x20)) ;This is FUNCTION KEY, the proper way to do this.
-                                           (char= read #.(code-char #x57))) ;Unfortunately, I must do this in an ugly way.
-                                      (cons :function integer))))))))
-      (and second (not third) (unread-char second))
-      first)))
+;;; input parsing
+
+(defun read-integer ()
+  (let ((digit-list (loop :with acc
+                          :for char = (read-char)
+                          :while (digit-char-p char)
+                          :do (push char acc)
+                          :finally (unread-char char) ; unread terminator
+                                   (return (nreverse acc)))))
+    (parse-integer (coerce digit-list 'string) :junk-allowed t)))
+
+(defun modify-key (key mod)
+  `(,key ,@(when (plusp (logand (1- mod) #b0001)) (list :shift))
+         ,@(when (plusp (logand (1- mod) #b0010)) (list :alt))
+         ,@(when (plusp (logand (1- mod) #b0100)) (list :control))
+         ,@(when (plusp (logand (1- mod) #b1000)) (list :meta))))
+
+;; the function name reflects the horror
+(defun read-modified-special-keys-and-f1-f4 (code)
+  "CSI 1 ; [mods] [terminator]"
+  (let* ((mod (read-integer))
+         (terminator (read-char))
+         (key (case terminator ; SPECIAL : keep this in sync with below
+                (#\P :f1) (#\Q :f2) (#\R :f3) (#\S :f4)
+                (#\A :up) (#\B :down) (#\C :right) (#\D :left)
+                (#\H :home)
+                (#\F :end))))
+    (if (and key mod (<= mod 16))
+        (modify-key key mod)
+        (concatenate 'list
+                      '(:unknown :csi) (princ-to-string code) ";" (princ-to-string mod)
+                       (string terminator)))))
+
+(defun code->fkey (code)
+  (case code
+    (2 :insert)
+    (3 :delete)
+    (4 :end) ;st?
+    (5 :page-up)
+    (6 :page-down)
+    (15 :f5)
+    (17 :f6) (18 :f7) (19 :f8) (20 :f9) (21 :f10)
+    (23 :f11) (24 :f12) (25 :f13) (26 :f14)
+    (28 :f15) (29 :f16)
+    (31 :f17) (32 :f18) (33 :f19) (34 :f20)))
+
+(defun read-modified-function-keys (code)
+  "CSI [code] ; [mods] ~"
+  (let ((fn (code->fkey code))
+        (mod (read-integer))
+        (terminator (read-char)))
+    (tagbody
+       (if (and fn mod (<= mod 16))
+           (if (char= terminator #\~)
+               (return-from read-modified-function-keys (modify-key fn mod))
+               (go fail))
+           (go fail))
+     fail
+       (return-from read-modified-function-keys
+         (concatenate 'list
+                       '(:unknown :csi) (princ-to-string code) ";" (princ-to-string mod)
+                        (string terminator))))))
+
+(defun read-function-and-special-keys ()
+  "CSI [code] ~/h (or modified, see above)"
+  (let ((code (read-integer))
+        (terminator (read-char)))
+    (tagbody
+       (return-from read-function-and-special-keys
+         (case terminator
+           (#\~
+            (or (code->fkey code) (go fail)))
+           (#\h
+            (if (= code 4)
+                :insert ; TODO why is st doing this
+                (go fail)))
+           (#\; ; modified key
+            (if (= code 1)
+                (read-modified-special-keys-and-f1-f4 code)
+                (read-modified-function-keys code)))
+           (otherwise
+            (go fail))))
+     fail
+       (return-from read-function-and-special-keys
+         (concatenate 'list
+                       '(:unknown :csi) (princ-to-string code) (string terminator))))))
+
+(defun read-mouse-sgr ()
+  "CSI < [code&mods] ; COL ; ROW ; M/m"
+  (let* ((code (read-integer))
+         (semicolon1 (read-char))
+         (col (read-integer))
+         (semicolon2 (read-char))
+         (row (read-integer))
+         (%state (read-char))
+         (state (cond ((plusp (logand code 32)) :drag)
+                      ((char= %state #\M) :click)
+                      ((char= %state #\m) :release)))
+         (mods `(,@(when (plusp (logand code 4)) (list :shift))
+                 ,@(when (plusp (logand code 8)) (list :alt))
+                 ,@(when (plusp (logand code 16)) (list :control))))
+         (type (case (+ (ldb (cons 2 0) code)
+                        (ash (ldb (cons 2 6) code) 2))
+                 (#b0000 :left)
+                 (#b0001 :middle)
+                 (#b0010 :right)
+                 (#b0011 :hover)
+                 (#b0100 :wheel-up)
+                 (#b0101 :wheel-down)
+                 (#b0110 :wheel-left)
+                 (#b0111 :wheel-right))))
+    (if (and (char= semicolon1 #\;) (char= semicolon2 #\;)
+             (or (char= %state #\m) (char= %state #\M))
+             code col row)
+        (append (list type state row col) mods)
+        (concatenate 'list
+                      '(:unknown :csi #\<)
+                       (princ-to-string code) (string semicolon1)
+                       (princ-to-string col) (string semicolon2)
+                       (princ-to-string row) (string state)))))
+
+(defun read-event ()
+  "Returns a value of one of the following forms:
+* CHARACTER - singular character
+* (CHARACTER [modifiers]...) - modifiers include :shift, :alt, :control and :meta
+* :f1-20, :home, :end, :insert, :delete, :up, :down, :left, :right, :page-down, :page-up
+* (:function/special [modifiers]...) - above but with modifiers
+* (:left/middle/right/wheel-up/down/left/right/hover :click/release/drag ROW COL [modifiers]...)
+* (:unknown [key-sequence]...)
+Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
+  (flet ((adjusted-c0-p (code)
+           (and (< code 32)
+                (/= code (char-code #\esc))
+                (/= code (char-code #\newline)))))
+    (let ((first (read-char)))
+      (or (and (listen) (char= #\esc first))
+          (return-from read-event
+            ;; C0 characters except esc are given the :control modifier
+            (let ((code (char-code first)))
+              (if (adjusted-c0-p code)
+                  (list (code-char (+ code 96)) :control)
+                  first)))))
+    ;; we have #\esc
+    (let ((second (read-char)))
+      (or (and (listen) (or (char= #\[ second) ; CSI
+                            (char= #\O second))) ; SS3
+          (return-from read-event
+            (let ((code (char-code second)))
+              (if (adjusted-c0-p code)
+                  (list (code-char (+ code 96)) :alt :control)
+                  (list second :alt)))))
+      ;; we have SS3 or CSI
+      (let ((third (read-char)))
+        (ecase second ; TODO use terminfo if needed. currently seems unreliable
+          (#\O ; following the VT220 convention, function keys begin with SS3 on xterms. but why.
+           (case third
+             (#\P :f1) (#\Q :f2) (#\R :f3) (#\S :f4)
+             (otherwise (list :unknown :ss3 third))))
+          (#\[ ; parse csi garbage. no rxvt support for now.
+           (case third
+             (#\A :up) (#\B :down) (#\C :right) (#\D :left)
+             (#\H :home)
+             (#\F :end) ; xterm. not so on st
+             ;; SPECIAL below are not modified
+             (#\P :delete) ; st TODO check their terminfo, kdch1 meant to be \e[3~
+             (#\Z (list #\tab :shift))
+             (#\< (read-mouse-sgr))
+             (otherwise
+              (if (digit-char-p third)
+                  (progn
+                    (unread-char third)
+                    (read-function-and-special-keys))
+                  (list :unknown :csi third))))))))))
 
 (defun mouse-event-p (event)
   (and (listp event)
-       (member (first event) '(:click :release :drag :hover
-                               :scroll-up :scroll-down :scroll-left :scroll-right))))
+       (>= (length event) 4)
+       (member (first event) '(:left :middle :right :hover
+                               :wheel-up :wheel-down :wheel-left :wheel-right))
+       (member (second event) '(:click :release :drag nil))
+       (positive-integer-p (third event))
+       (positive-integer-p (fourth event))
+       (every (lambda (elt) (member elt '(:shift :alt :control :meta)))
+              (nthcdr 4 event))))
 
-(defun read-event-timeout (&optional timeout (stream *terminal-io*))
+(defun read-event-timeout (&optional timeout)
   #+sbcl (if timeout
              (handler-case
                  (sb-sys:with-deadline (:seconds timeout)
-                   (read-event stream))
+                   (read-event))
                (sb-sys:deadline-timeout ()))
-             (read-event stream))
+             (read-event))
   #+ccl (if timeout
             (handler-case
                 (ccl:with-input-timeout ((s stream) timeout)
@@ -258,11 +332,10 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   ;;                                     #'(lambda (fd)
   ;;                                         (setf event (read-event stream))))
   ;;         (serve-event:serve-event timeout))
-  #-(or sbcl ccl ecl)
+  #-(or sbcl ccl)
   (if timeout
-      (error "timeout not supported")
-      (read-event stream))
-  )
+      (error "timeout only supported on sbcl, ccl")
+      (read-event stream)))
 
 ;;; sigwinch
 
@@ -327,7 +400,6 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
 
 ;; styling
 
-;; TODO split this out of vico and this library?
 (defstruct (style (:conc-name nil))
   (fg nil :type (or null (integer #x000000 #xffffff)))
   (bg nil :type (or null (integer #x000000 #xffffff)))

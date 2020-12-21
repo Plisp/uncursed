@@ -159,8 +159,11 @@ Note that setf-ing the style copies over the new attributes into the existing ce
 (defclass standard-window (window)
   ())
 
-(defgeneric handle-mouse-event (window tui type button line col controlp))
-(defgeneric handle-key-event (window tui event))
+(defgeneric handle-mouse-event (window tui button state line col &key &allow-other-keys)
+  (:documentation "Interface may change. Methods may optionally accept boolean keyword
+arguments :shift, :alt, :control and :meta."))
+(defgeneric handle-key-event (window tui event)
+  (:documentation "Interface may change."))
 
 (defvar *put-buffer*)
 (defvar *put-window*)
@@ -438,13 +441,18 @@ Note that setf-ing the style copies over the new attributes into the existing ce
     (rotatef screen canvas)))
 
 (defun dispatch-mouse-event (window tui event)
-  (destructuring-bind (type button col line . controlp) event
+  (destructuring-bind (button state line col &rest modifiers) event
     (let* ((dimensions (dimensions window))
            (relative-line (- line (rect-y dimensions)))
            (relative-column (- col (rect-x dimensions))))
       (when (and (<= 1 relative-line (rect-rows dimensions))
                  (<= 1 relative-column (rect-cols dimensions)))
-        (handle-mouse-event window tui type button relative-line relative-column controlp)))))
+        (let ((shift (member :shift modifiers))
+              (alt (member :alt modifiers))
+              (control (member :control modifiers))
+              (meta (member :meta modifiers)))
+          (handle-mouse-event window tui button state relative-line relative-column
+                              :shift shift :alt alt :control control :meta meta))))))
 
 (defclass timer ()
   ((%callback :initarg :callback

@@ -22,7 +22,7 @@
   (tui:set-cursor-shape :invisible))
 
 (defun tui-handle-event (tui ev)
-  (cond ((and (characterp ev) (char= ev #\etb))
+  (cond ((equal ev '(#\w :control))
          (tui:stop tui))))
 
 (defclass palette-view (tui:standard-window)
@@ -45,17 +45,16 @@
     (tui:put #\< (1+ fg-index) 3 (tui:make-style :fg (nth fg-index colors)))
     (tui:put #\< (1+ bg-index) 3 (tui:make-style :bg (nth bg-index colors)))))
 
-(defmethod tui:handle-mouse-event ((window palette-view) tui type button y x controlp)
-  (declare (ignore controlp))
-  (when (and (eq type :click)
+(defmethod tui:handle-mouse-event ((window palette-view) tui button state y x &key)
+  (when (and (eq state :click)
              (<= 1 x 2))
     (let* ((palette-index (1- y))
            (new-color (nth palette-index (colors window))))
       (case button
-        (1 (setf (tui:fg (draw-style *paint-ui*)) new-color
-                 (palette-fg-index window) palette-index))
-        (3 (setf (tui:bg (draw-style *paint-ui*)) new-color
-                 (palette-bg-index window) palette-index))))))
+        (:left (setf (tui:fg (draw-style *paint-ui*)) new-color
+                     (palette-fg-index window) palette-index))
+        (:right (setf (tui:bg (draw-style *paint-ui*)) new-color
+                      (palette-bg-index window) palette-index))))))
 
 (defclass layer-view (tui:standard-window)
   ((layers :initarg :layers
@@ -71,10 +70,9 @@
                               (tui:cell-style (row-major-aref tui::*put-buffer* i))
                               (tui:cell-style cell))))))
 
-(defmethod tui:handle-mouse-event ((window layer-view) tui type button line col controlp)
-  (declare (ignore controlp))
-  (when (and (or (eq type :click) (eq type :drag))
-             (= button 1))
+(defmethod tui:handle-mouse-event ((window layer-view) tui button state line col &key)
+  (when (and (or (eq state :click) (eq state :drag))
+             (eq button :left))
     (block draw
       (handler-bind ((tui:wide-char-overwrite-error
                        (lambda (e)

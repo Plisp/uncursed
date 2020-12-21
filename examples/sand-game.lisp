@@ -49,7 +49,7 @@
 (defmethod tui:handle-key-event ((window sand-view) tui event)
   nil)
 
-(defmethod tui:handle-mouse-event ((window sand-view) tui type button line col controlp)
+(defmethod tui:handle-mouse-event ((window sand-view) tui button state line col &key)
   (setf (aref *projectiles* (1- line) (1- col)) (tui:make-style :fg #xffffff)))
 
 ;;; score panel
@@ -156,8 +156,8 @@
 (defmethod tui:handle-key-event ((window panel-view) tui event)
   nil)
 
-(defmethod tui:handle-mouse-event ((window panel-view) tui type button line col controlp)
-  (cond ((and (eq type :click) (= line 6))
+(defmethod tui:handle-mouse-event ((window panel-view) tui button state line col &key)
+  (cond ((and (eq state :click) (= line 6))
          ;;(setf *panel-food* (min (+ *panel-food* 40) *panel-bar-max*))
          (let ((pizza (make-instance 'pizza-view
                                      :dimensions (tui:make-rectangle :x (random 60)
@@ -165,7 +165,7 @@
                                                                      :rows 3
                                                                      :cols 13))))
            (push pizza (tui:windows tui))))
-        ((and (eq type :click) (= line 8))
+        ((and (eq state :click) (= line 8))
          (setf *panel-water* (min (+ *panel-water* 40) *panel-bar-max*)))
         ))
 
@@ -188,7 +188,7 @@
 (defmethod tui:handle-key-event ((window pizza-view) tui event)
   nil)
 
-(defmethod tui:handle-mouse-event ((window pizza-view) tui type button line col controlp)
+(defmethod tui:handle-mouse-event ((window pizza-view) tui button state line col &key)
   (alexandria:deletef (tui:windows tui) window)
   (setf *panel-food* (min (+ *panel-food* 5) *panel-bar-max*))
   t)
@@ -196,7 +196,7 @@
 ;;; game logic
 
 (defun tui-handle-event (tui ev)
-  (cond ((and (characterp ev) (char= ev #\etb))
+  (cond ((equal ev '(#\w :control))
          (tui:stop tui))
         ;; ((and (characterp ev) (char= ev #\esc))
         ;;  (incf *hp* *tui-width*)

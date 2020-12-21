@@ -24,6 +24,7 @@
            #:restore-terminal
            #:terminal-dimensions
            #:enable-mouse #:disable-mouse
+           #:enable-focus-tracking #:disable-focus-tracking
            #:enable-alternate-screen #:disable-alternate-screen
            #:clear-screen #:clear-to-end-of-line #:clear-chars
            #:set-cursor-position

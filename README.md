@@ -8,6 +8,8 @@ n.b. `sand-game.lisp` features the color/timer functionality of the library and 
 
 - [x] unicode support
 - [x] basic terminal resizing support
-- [ ] more comprehensive input handling
+- [x] comprehensive input handling
+  - [x] any-event mouse tracking (SGR 1006 only)
+  - [x] special keys, including modifiers
 - [x] timers
 - [ ] widgets

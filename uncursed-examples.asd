@@ -6,5 +6,6 @@
   :depends-on (:uncursed)
   :components ((:module "examples"
                 :serial t
-                :components ((:file "sand-game")
+                :components ((:file "input")
+                             (:file "sand-game")
                              (:file "paint")))))
