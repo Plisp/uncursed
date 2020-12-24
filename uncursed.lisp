@@ -424,7 +424,7 @@ arguments :shift, :alt, :control and :meta."))
     (let ((*put-buffer* canvas))
       (map () #'present (windows tui)))
     ;; render diff to terminal
-    (set-style *default-style*)
+    (set-style *default-style* (use-palette tui))
     (loop :with diff = (buffer-diff screen canvas)
           :with current-style = *default-style*
           :with last-pos

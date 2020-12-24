@@ -12,7 +12,7 @@
 (eval-when (:execute)
   ;; add exceptions here
   ()
-  ;; only alacritty works correctly, so support doesn't seem necessary in the near future
+  ;; only alacritty works correctly, so triplewidth support doesn't seem necessary
   ;;(setf (gethash (char-code #\⸻) *character-widths*) 3)
   )
 
@@ -408,10 +408,6 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
   (reversep nil :type boolean)
   (underlinep nil :type boolean))
 
-(defun red (color) (ldb (byte 8 16) color))
-(defun green (color) (ldb (byte 8 8) color))
-(defun blue (color) (ldb (byte 8 0) color))
-
 (defun style-difference (a b)
   (let ((fga (fg a))
         (fgb (fg b))
@@ -442,9 +438,11 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 
 (defvar *default-style* (make-style))
 
-(defun color-magic (c)
-  "very clever."
-  (truncate (* c 1000/255)))
+(defun initialize-color-magic (index attr)
+  (ti:tputs ti:initialize-color index
+            (color-magic (red attr))
+            (color-magic (green attr))
+            (color-magic (blue attr))))
 
 ;; if you don't follow ecma-48, too bad
 (defun set-style-from-old (current-style new-style &optional use-palette)
@@ -458,14 +456,11 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
                       ((nil)
                        (format nil "38;2;~d;~d;~d;" (red attr) (green attr) (blue attr)))
                       ((t)
-                       (if-let (index (gethash attr *palette*))
+                       (if-let (index (lookup-color attr))
                          (format nil "38;5;~d;" index)
                          (let ((index (next-free-color)))
-                           (ti:tputs ti:initialize-color index
-                                     (color-magic (red attr))
-                                     (color-magic (green attr))
-                                     (color-magic (blue attr)))
-                           (setf (gethash attr *palette*) index)
+                           (initialize-color-magic index attr)
+                           (setf (aref *palette* index) attr)
                            (format nil "38;5;~d;" index))))
                       (:approximate
                        (format nil "38;5;~d;" (approximate-rgb attr))))))
@@ -476,14 +471,11 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
                       ((nil)
                        (format nil "48;2;~d;~d;~d;" (red attr) (green attr) (blue attr)))
                       ((t)
-                       (if-let (index (gethash attr *palette*))
+                       (if-let (index (lookup-color attr))
                          (format nil "48;5;~d;" index)
                          (let ((index (next-free-color)))
-                           (ti:tputs ti:initialize-color index
-                                     (color-magic (red attr))
-                                     (color-magic (green attr))
-                                     (color-magic (blue attr)))
-                           (setf (gethash attr *palette*) index)
+                           (initialize-color-magic index attr)
+                           (setf (aref *palette* index) attr)
                            (format nil "48;5;~d;" index))))
                       (:approximate
                        (format nil "48;5;~d;" (approximate-rgb attr))))))
@@ -499,9 +491,9 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
         (setf (aref s (1- (length s))) #\m) ; last #\;->#\m
         (write-string s *terminal-io*)))))
 
-(defun set-style (style)
+(defun set-style (style &optional use-palette)
   (ti:tputs ti:exit-attribute-mode)
-  (set-style-from-old *default-style* style))
+  (set-style-from-old *default-style* style use-palette))
 
 (defun set-foreground (r g b)
   (format *terminal-io* "~c[38;2;~d;~d;~dm" #\esc r g b))
