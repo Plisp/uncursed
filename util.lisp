@@ -139,10 +139,10 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
     (parse-integer (coerce digit-list 'string) :junk-allowed t)))
 
 (defun modify-key (key mod)
-  `(,key ,@(when (plusp (logand (1- mod) #b0001)) (list :shift))
-         ,@(when (plusp (logand (1- mod) #b0010)) (list :alt))
+  `(,key ,@(when (plusp (logand (1- mod) #b1000)) (list :meta))
          ,@(when (plusp (logand (1- mod) #b0100)) (list :control))
-         ,@(when (plusp (logand (1- mod) #b1000)) (list :meta))))
+         ,@(when (plusp (logand (1- mod) #b0010)) (list :alt))
+         ,@(when (plusp (logand (1- mod) #b0001)) (list :shift))))
 
 ;; the function name reflects the horror
 (defun read-modified-special-keys-and-f1-f4 (code)
@@ -151,7 +151,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
          (terminator (read-char))
          (key (case terminator ; SPECIAL : keep this in sync with below
                 (#\P :f1) (#\Q :f2) (#\R :f3) (#\S :f4)
-                (#\A :up) (#\B :down) (#\C :right) (#\D :left)
+                (#\A :up-arrow) (#\B :down-arrow) (#\C :right-arrow) (#\D :left-arrow)
                 (#\H :home)
                 (#\F :end))))
     (if (and key mod (<= mod 16))
@@ -225,9 +225,9 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
          (state (cond ((plusp (logand code 32)) :drag)
                       ((char= %state #\M) :click)
                       ((char= %state #\m) :release)))
-         (mods `(,@(when (plusp (logand code 4)) (list :shift))
+         (mods `(,@(when (plusp (logand code 16)) (list :control))
                  ,@(when (plusp (logand code 8)) (list :alt))
-                 ,@(when (plusp (logand code 16)) (list :control))))
+                 ,@(when (plusp (logand code 4)) (list :shift))))
          (type (case (+ (ldb (cons 2 0) code)
                         (ash (ldb (cons 2 6) code) 2))
                  (#b0000 :left)
@@ -252,7 +252,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   "Returns a value of one of the following forms:
 * CHARACTER - singular character
 * (CHARACTER [modifiers]...) - modifiers include :shift, :alt, :control and :meta
-* :f1-20, :home, :end, :insert, :delete, :up, :down, :left, :right, :page-down, :page-up
+* :f1-20, :home, :end, :insert, :delete, :up/:down/:left/:right-arrow, :page-down, :page-up
 * (:function/special [modifiers]...) - above but with modifiers
 * (:left/middle/right/wheel-up/down/left/right/hover :click/release/drag ROW COL [modifiers]...)
 * (:unknown [key-sequence]...)
@@ -276,7 +276,7 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
           (return-from read-event
             (let ((code (char-code second)))
               (if (adjusted-c0-p code)
-                  (list (code-char (+ code 96)) :alt :control)
+                  (list (code-char (+ code 96)) :control :alt)
                   (list second :alt)))))
       ;; we have SS3 or CSI
       (let ((third (read-char)))
@@ -287,7 +287,7 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
              (otherwise (list :unknown :ss3 third))))
           (#\[ ; parse csi garbage. no rxvt support for now.
            (case third
-             (#\A :up) (#\B :down) (#\C :right) (#\D :left)
+             (#\A :up-arrow) (#\B :down-arrow) (#\C :right-arrow) (#\D :left-arrow)
              (#\H :home)
              (#\F :end) ; xterm. not so on st
              ;; SPECIAL below are not modified
