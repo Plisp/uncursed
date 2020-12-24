@@ -6,10 +6,12 @@ A higher-level buffered abstraction and low-level utilities are available. Suppo
 Some basic examples can be found in the `examples` directory.
 n.b. `sand-game.lisp` features the color/timer functionality of the library and displays flashing colors.
 
-- [x] unicode support
-- [x] basic terminal resizing support
+- [x] direct-color (truecolor) support
+  - [x] palette fallback (init_color or approximation)
 - [x] comprehensive input handling
-  - [x] any-event mouse tracking (SGR 1006 only)
+  - [x] any-event mouse tracking (SGR 1006 only), including modifiers
   - [x] special keys, including modifiers
+- [x] unicode support (combining and fullwidth)
+- [x] basic terminal resizing support
 - [x] timers
 - [ ] widgets

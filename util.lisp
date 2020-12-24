@@ -228,8 +228,8 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
          (mods `(,@(when (plusp (logand code 16)) (list :control))
                  ,@(when (plusp (logand code 8)) (list :alt))
                  ,@(when (plusp (logand code 4)) (list :shift))))
-         (type (case (+ (ldb (cons 2 0) code)
-                        (ash (ldb (cons 2 6) code) 2))
+         (type (case (+ (ldb (byte 2 0) code)
+                        (ash (ldb (byte 2 6) code) 2))
                  (#b0000 :left)
                  (#b0001 :middle)
                  (#b0010 :right)
@@ -321,8 +321,8 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
              (read-event))
   #+ccl (if timeout
             (handler-case
-                (ccl:with-input-timeout ((s stream) timeout)
-                  (read-event s))
+                (ccl:with-input-timeout ((s *terminal-io*) timeout)
+                  (read-event))
               (ccl:input-timeout ())))
   ;; TODO best way to do this on ecl?
   ;; #+ecl (let ((serve-event::*descriptor-handlers*
@@ -330,12 +330,12 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
   ;;             (event))
   ;;         (serve-event:add-fd-handler (si:file-stream-fd stream) :input
   ;;                                     #'(lambda (fd)
-  ;;                                         (setf event (read-event stream))))
+  ;;                                         (setf event (read-event))))
   ;;         (serve-event:serve-event timeout))
   #-(or sbcl ccl)
   (if timeout
       (error "timeout only supported on sbcl, ccl")
-      (read-event stream)))
+      (read-event)))
 
 ;;; sigwinch
 

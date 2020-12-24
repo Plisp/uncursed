@@ -60,31 +60,33 @@
 (defvar *hp*)
 (defvar *score*)
 
-(let ((intensity 255)
-      (length 70))
-  (defparameter *color-scale*
-    (let ((increment (1+ (truncate intensity (truncate length 5)))))
-      (apply #'alexandria:circular-list
-             (append (loop :for r = intensity
-                           :for g :to intensity :by increment
-                           :for b = 0
-                           :collect (+ (ash r 16) (ash g 8) b))
-                     (loop :for r :downfrom intensity :to 0 :by increment
-                           :for g = intensity
-                           :for b = 0
-                           :collect (+ (ash r 16) (ash g 8) b))
-                     (loop :for r = 0
-                           :for g = intensity
-                           :for b :to intensity :by increment
-                           :collect (+ (ash r 16) (ash g 8) b))
-                     (loop :for r = 0
-                           :for g :downfrom intensity :to 0 :by increment
-                           :for b = intensity
-                           :collect (+ (ash r 16) (ash g 8) b))
-                     (loop :for r :to intensity :by increment
-                           :for g = 0
-                           :for b = intensity
-                           :collect (+ (ash r 16) (ash g 8) b)))))))
+
+(defconstant +intensity+ 255)
+(defconstant +colors+ 70)
+
+(defparameter *color-scale*
+  (let ((increment (1+ (truncate +intensity+ (truncate +colors+ 5)))))
+    (apply #'alexandria:circular-list
+           (append (loop :for r = +intensity+
+                         :for g :to +intensity+ :by increment
+                         :for b = 0
+                         :collect (+ (ash r 16) (ash g 8) b))
+                   (loop :for r :downfrom +intensity+ :to 0 :by increment
+                         :for g = +intensity+
+                         :for b = 0
+                         :collect (+ (ash r 16) (ash g 8) b))
+                   (loop :for r = 0
+                         :for g = +intensity+
+                         :for b :to +intensity+ :by increment
+                         :collect (+ (ash r 16) (ash g 8) b))
+                   (loop :for r = 0
+                         :for g :downfrom +intensity+ :to 0 :by increment
+                         :for b = +intensity+
+                         :collect (+ (ash r 16) (ash g 8) b))
+                   (loop :for r :to +intensity+ :by increment
+                         :for g = 0
+                         :for b = +intensity+
+                         :collect (+ (ash r 16) (ash g 8) b))))))
 
 (defvar *panel-color*)
 (defvar *panel-food*)

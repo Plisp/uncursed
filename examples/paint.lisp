@@ -21,6 +21,9 @@
   (tui:enable-alternate-screen)
   (tui:set-cursor-shape :invisible))
 
+(defmethod tui:handle-resize (tui)
+  nil)
+
 (defun tui-handle-event (tui ev)
   (cond ((equal ev '(#\w :control))
          (tui:stop tui))))
