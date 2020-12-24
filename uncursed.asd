@@ -9,6 +9,6 @@
   :components ((:file "package")
                (:cffi-grovel-file "grovel")
                (:file "condition")
-               (:file "approximate")
+               (:file "hacks")
                (:file "util")
                (:file "uncursed")))

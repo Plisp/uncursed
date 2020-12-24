@@ -130,7 +130,7 @@
                                                                         :y 0
                                                                         :cols 3
                                                                         :rows rows)
-                                        :colors (color-scale rows 150)))
+                                        :colors (color-scale rows 222)))
          (initial-layer
            (make-array (list rows columns)))
          (layer-view

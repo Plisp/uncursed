@@ -125,7 +125,7 @@ Note that setf-ing the style copies over the new attributes into the existing ce
    (%use-palette :initform nil
                  :initarg :use-palette
                  :accessor use-palette
-                 :type boolean)))
+                 :type (member t nil :approximate))))
 
 (define-condition window-bounds-error (uncursed-error)
   ((coordinate :initarg :coordinate
@@ -538,6 +538,8 @@ either the next timer expiry interval or NIL, meaning to cancel the timer.")
                        (when next-interval
                          (setf (timer-interval next-timer) next-interval)
                          (schedule-timer tui next-timer))))))))
+      (when (eq (use-palette tui) t)
+        (sys::reset-colors)) ; hope
       (disable-mouse)
       (set-cursor-shape :block)
       (disable-alternate-screen)

@@ -442,6 +442,11 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 
 (defvar *default-style* (make-style))
 
+(defun color-magic (c)
+  "very clever."
+  (truncate (* c 1000/255)))
+
+;; if you don't follow ecma-48, too bad
 (defun set-style-from-old (current-style new-style &optional use-palette)
   (when-let ((diff (style-difference current-style new-style)))
     (flet ((attr-string (name attr)
@@ -449,15 +454,39 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
                (:fg
                 (if (not attr)
                     (format nil "39;")
-                    (if use-palette
-                        (format nil "38;5;~d;" (approximate-rgb attr))
-                        (format nil "38;2;~d;~d;~d;" (red attr) (green attr) (blue attr)))))
+                    (ecase use-palette
+                      ((nil)
+                       (format nil "38;2;~d;~d;~d;" (red attr) (green attr) (blue attr)))
+                      ((t)
+                       (if-let (index (gethash attr *palette*))
+                         (format nil "38;5;~d;" index)
+                         (let ((index (next-free-color)))
+                           (ti:tputs ti:initialize-color index
+                                     (color-magic (red attr))
+                                     (color-magic (green attr))
+                                     (color-magic (blue attr)))
+                           (setf (gethash attr *palette*) index)
+                           (format nil "38;5;~d;" index))))
+                      (:approximate
+                       (format nil "38;5;~d;" (approximate-rgb attr))))))
                (:bg
                 (if (not attr)
                     (format nil "49;")
-                    (if use-palette
-                        (format nil "48;5;~d;" (approximate-rgb attr))
-                        (format nil "48;2;~d;~d;~d;" (red attr) (green attr) (blue attr)))))
+                    (ecase use-palette
+                      ((nil)
+                       (format nil "48;2;~d;~d;~d;" (red attr) (green attr) (blue attr)))
+                      ((t)
+                       (if-let (index (gethash attr *palette*))
+                         (format nil "48;5;~d;" index)
+                         (let ((index (next-free-color)))
+                           (ti:tputs ti:initialize-color index
+                                     (color-magic (red attr))
+                                     (color-magic (green attr))
+                                     (color-magic (blue attr)))
+                           (setf (gethash attr *palette*) index)
+                           (format nil "48;5;~d;" index))))
+                      (:approximate
+                       (format nil "48;5;~d;" (approximate-rgb attr))))))
                (:bold (if attr "1;" "22;"))
                (:italic (if attr "3;" "23;"))
                (:reverse (if attr "7;" "27;"))
