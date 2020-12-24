@@ -14,7 +14,7 @@
 (defclass paint-ui (tui:tui)
   ((draw-char :initform #\.
               :accessor draw-char)
-   (draw-style :initform (tui:make-style :fg #xff0000 :bg #xff0000)
+   (draw-style :initform (tui:make-style :fg #xffffff :bg #x000000)
                :accessor draw-style)))
 
 (defmethod tui:run :before ((tui paint-ui))
@@ -121,7 +121,7 @@
                   :for b = intensity
                   :collect (+ (ash r 16) (ash g 8) b)))))
 
-(defun tui-main ()
+(defun tui-main (use-palette)
   (let* ((dimensions (tui:terminal-dimensions))
          (rows (car dimensions))
          (columns (cdr dimensions))
@@ -142,12 +142,13 @@
          (*paint-ui*
            (make-instance 'paint-ui :focused-window layer-view
                                     :windows (list layer-view palette-window)
-                                    :event-handler #'tui-handle-event)))
+                                    :event-handler #'tui-handle-event
+                                    :use-palette use-palette)))
     (loop :for idx :below (array-total-size initial-layer)
           :do (setf (row-major-aref initial-layer idx) (make-instance 'tui:cell)))
     (tui:run *paint-ui*)))
 
-(defun main ()
+(defun main (&optional use-palette)
   (if (member :slynk *features*)
-      (bt:make-thread (lambda () (tui-main)))
-      (tui-main)))
+      (bt:make-thread (lambda () (tui-main use-palette)))
+      (tui-main use-palette)))

@@ -442,16 +442,22 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 
 (defvar *default-style* (make-style))
 
-(defun set-style-from-old (current-style new-style)
+(defun set-style-from-old (current-style new-style &optional use-palette)
   (when-let ((diff (style-difference current-style new-style)))
     (flet ((attr-string (name attr)
              (case name
-               (:fg (if attr
-                        (format nil "38;2;~d;~d;~d;" (red attr) (green attr) (blue attr))
-                        (format nil "39;")))
-               (:bg (if attr
-                        (format nil "48;2;~d;~d;~d;" (red attr) (green attr) (blue attr))
-                        (format nil "49;")))
+               (:fg
+                (if (not attr)
+                    (format nil "39;")
+                    (if use-palette
+                        (format nil "38;5;~d;" (approximate-rgb attr))
+                        (format nil "38;2;~d;~d;~d;" (red attr) (green attr) (blue attr)))))
+               (:bg
+                (if (not attr)
+                    (format nil "49;")
+                    (if use-palette
+                        (format nil "48;5;~d;" (approximate-rgb attr))
+                        (format nil "48;2;~d;~d;~d;" (red attr) (green attr) (blue attr)))))
                (:bold (if attr "1;" "22;"))
                (:italic (if attr "3;" "23;"))
                (:reverse (if attr "7;" "27;"))

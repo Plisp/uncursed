@@ -121,7 +121,11 @@ Note that setf-ing the style copies over the new attributes into the existing ce
                    :initarg :event-handler
                    :accessor event-handler)
    (%timers :initform (list)
-            :accessor timers)))
+            :accessor timers)
+   (%use-palette :initform nil
+                 :initarg :use-palette
+                 :accessor use-palette
+                 :type boolean)))
 
 (define-condition window-bounds-error (uncursed-error)
   ((coordinate :initarg :coordinate
@@ -431,7 +435,7 @@ arguments :shift, :alt, :control and :meta."))
                          (= (car pos) (car last-pos))
                          (= (cdr pos) (+ (cdr last-pos) last-width)))
                     (set-cursor-position (car pos) (cdr pos)))
-                (set-style-from-old current-style (cell-style cell))
+                (set-style-from-old current-style (cell-style cell) (use-palette tui))
                 (setf current-style (cell-style cell))
                 (write-string (cell-string cell))
                 (setf last-pos pos
