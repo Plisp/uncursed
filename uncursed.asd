@@ -3,7 +3,7 @@
   :author "tianlin qu"
   :license "BSD 3-Clause"
   :defsystem-depends-on ("cffi-grovel")
-  :depends-on (:alexandria :cffi :terminfo)
+  :depends-on (:alexandria :cffi :terminfo :cl-setlocale)
   :version "0.2.0"
   :serial t
   :components ((:file "package")

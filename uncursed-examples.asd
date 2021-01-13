@@ -8,4 +8,5 @@
                 :serial t
                 :components ((:file "input")
                              (:file "sand-game")
-                             (:file "paint")))))
+                             (:file "paint")
+                             (:file "shockwave")))))

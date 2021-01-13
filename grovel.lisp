@@ -12,9 +12,6 @@
   (include "wchar.h")
   (ctype c-wchar "wchar_t") ;will break on windows
 
-  (include "locale.h")
-  (constant (c-lc-ctype "LC_CTYPE"))
-
   (include "sys/ioctl.h")
   (cstruct c-winsize "struct winsize"
            (c-ws-rows "ws_row" :type :unsigned-short)

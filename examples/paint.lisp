@@ -22,7 +22,7 @@
   (tui:set-cursor-shape :invisible))
 
 (defmethod tui:handle-resize (tui)
-  nil)
+  tui)
 
 (defun tui-handle-event (tui ev)
   (cond ((equal ev '(#\w :control))

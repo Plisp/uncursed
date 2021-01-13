@@ -92,8 +92,7 @@ backing FD. Returns NIL on failure."
 (defun setup-terminal (fd)
   "Disables terminal echoing and buffering. Returns a pointer to the original termios.
 Sets process locale from environment."
-  (cffi:with-foreign-string (s "")
-    (cffi:foreign-funcall "setlocale" :int c-lc-ctype :string s :pointer))
+  (cl-setlocale:set-all-to-native)
   (let ((old-termios (cffi:foreign-alloc '(:struct c-termios))))
     (when (minusp (tcgetattr fd old-termios))
       (error-syscall-error "tcgetattr failed"))
@@ -322,6 +321,7 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
   #+ccl (if timeout
             (handler-case
                 (ccl:with-input-timeout ((s *terminal-io*) timeout)
+                  s
                   (read-event))
               (ccl:input-timeout ())))
   ;; TODO best way to do this on ecl?
