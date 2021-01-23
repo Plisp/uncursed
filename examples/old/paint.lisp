@@ -1,3 +1,6 @@
+;;;; DISCLAIMER
+;;;; hacky toy for testing colors which is not representative of this library's proper use
+
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (require 'bordeaux-threads))
 
@@ -21,7 +24,7 @@
   (tui:enable-alternate-screen)
   (tui:set-cursor-shape :invisible))
 
-(defmethod tui:handle-resize (tui)
+(defmethod tui:handle-resize ((tui paint-ui))
   tui)
 
 (defun tui-handle-event (tui ev)
@@ -68,6 +71,7 @@
     (loop :for layer :in layers
           :do (loop :for i :from 0 :below (array-total-size layer)
                     :for cell = (row-major-aref layer i)
+                    ;; don't do this at home
                     :do (setf (tui:cell-string (row-major-aref tui::*put-buffer* i))
                               (tui:cell-string cell)
                               (tui:cell-style (row-major-aref tui::*put-buffer* i))
@@ -90,7 +94,8 @@
                                   (tui:rect-cols (tui:dimensions
                                                   (tui:window-bounds-error-window e))))
                            (return-from draw)))))
-        ;; don't do this. I'm only using tui:put outside PRESENT here since the canvas = data
+        ;; usually there is no reason to do this.
+        ;; I'm only using tui:put outside PRESENT here since the canvas = data
         (tui:put (draw-char *paint-ui*)
                  line col
                  (draw-style *paint-ui*)
@@ -129,18 +134,16 @@
          (rows (car dimensions))
          (columns (cdr dimensions))
          (palette-window
-           (make-instance 'palette-view :dimensions (tui:make-rectangle :x 0
-                                                                        :y 0
-                                                                        :cols 3
-                                                                        :rows rows)
+           (make-instance 'palette-view :dimensions (tui:make-rect :x 0 :y 0
+                                                                   :cols 3
+                                                                   :rows rows)
                                         :colors (color-scale rows 222)))
          (initial-layer
            (make-array (list rows columns)))
          (layer-view
-           (make-instance 'layer-view :dimensions (tui:make-rectangle :x 3
-                                                                      :y 0
-                                                                      :cols (- columns 3)
-                                                                      :rows rows)
+           (make-instance 'layer-view :dimensions (tui:make-rect :x 3 :y 0
+                                                                 :cols (- columns 3)
+                                                                 :rows rows)
                                       :layers (list initial-layer)))
          (*paint-ui*
            (make-instance 'paint-ui :focused-window layer-view

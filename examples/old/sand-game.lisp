@@ -1,3 +1,9 @@
+;;;; DISCLAIMER
+;;;; this was a weekend job, interleaved with implementing timer support and library fixes
+;;;; clearly the work of a madman wholly unacquainted with real game development
+;;;; It will be left in this state for sentimental value. Do not use the lib in this manner
+;;;;
+
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (require 'bordeaux-threads))
 
@@ -22,7 +28,7 @@
   (tui:set-cursor-shape :invisible))
 
 (defmethod tui:handle-resize ((tui game-ui))
-  (when (or (< (tui:columns tui) *tui-width*) (< (tui:lines tui) 30))
+  (when (or (< (tui:cols tui) *tui-width*) (< (tui:rows tui) 30))
     (dotimes (i 10)
       (print "get a bigger terminal"))
     (sleep 2)
@@ -123,14 +129,14 @@
               (tui:make-style :fg (car *panel-color*) :boldp t))
     ;; water bar
     (tui:put-style (tui:make-style :fg #x228B22 :bg #xD6A373 :boldp t)
-                   (tui:make-rectangle :x 1 :y 5
-                                       :rows 1
-                                       :cols *panel-food*))
+                   (tui:make-rect :x 1 :y 5
+                                  :rows 1
+                                  :cols *panel-food*))
     (maybe-rainbow)
     (tui:put-style (tui:make-style :bg (car *panel-color*) :boldp t)
-                   (tui:make-rectangle :x (1+ *panel-food*) :y 5
-                                       :rows 1
-                                       :cols (- *tui-width* *sand-width* *panel-food* 2)))
+                   (tui:make-rect :x (1+ *panel-food*) :y 5
+                                  :rows 1
+                                  :cols (- *tui-width* *sand-width* *panel-food* 2)))
     ;; border
     (tui:puts "┠────────────────────────────────────────────────┨"
               7 1
@@ -142,14 +148,14 @@
               (tui:make-style :fg (car *panel-color*) :boldp t))
     ;; water bar
     (tui:put-style (tui:make-style :fg #x228B22 :bg #x40A4DF :boldp t)
-                   (tui:make-rectangle :x 1 :y 7
-                                       :rows 1
-                                       :cols *panel-water*))
+                   (tui:make-rect :x 1 :y 7
+                                  :rows 1
+                                  :cols *panel-water*))
     (maybe-rainbow)
     (tui:put-style (tui:make-style :bg (car *panel-color*) :boldp t)
-                   (tui:make-rectangle :x (1+ *panel-water*) :y 7
-                                       :rows 1
-                                       :cols (- *tui-width* *sand-width* *panel-water* 2)))
+                   (tui:make-rect :x (1+ *panel-water*) :y 7
+                                  :rows 1
+                                  :cols (- *tui-width* *sand-width* *panel-water* 2)))
     ;; border
     (tui:puts "└────────────────────────────────────────────────┘"
               9 1
@@ -160,16 +166,14 @@
 
 (defmethod tui:handle-mouse-event ((window panel-view) tui button state line col &key)
   (cond ((and (eq state :click) (= line 6))
-         ;;(setf *panel-food* (min (+ *panel-food* 40) *panel-bar-max*))
          (let ((pizza (make-instance 'pizza-view
-                                     :dimensions (tui:make-rectangle :x (random 60)
-                                                                     :y (random 30)
-                                                                     :rows 3
-                                                                     :cols 13))))
+                                     :dimensions (tui:make-rect :x (random 60)
+                                                                :y (random 30)
+                                                                :rows 3
+                                                                :cols 13))))
            (push pizza (tui:windows tui))))
         ((and (eq state :click) (= line 8))
-         (setf *panel-water* (min (+ *panel-water* 40) *panel-bar-max*)))
-        ))
+         (setf *panel-water* (min (+ *panel-water* 40) *panel-bar-max*)))))
 
 ;;; the pizza
 
@@ -199,11 +203,7 @@
 
 (defun tui-handle-event (tui ev)
   (cond ((equal ev '(#\w :control))
-         (tui:stop tui))
-        ;; ((and (characterp ev) (char= ev #\esc))
-        ;;  (incf *hp* *tui-width*)
-        ;;  (break))
-        ))
+         (tui:stop tui))))
 
 (defvar *tick* 0.1)
 (defvar *time*)
@@ -232,7 +232,7 @@
                   :do (let ((sand (aref *sand* y x)))
                         (when sand
                           (setf (aref *sand* y x) nil)
-                          (cond ((= y (1- (tui:lines tui)))
+                          (cond ((= y (1- (tui:rows tui)))
                                  (decf *sand-count*)
                                  (decf *hp*))
                                 ((aref *projectiles* y x)
@@ -293,7 +293,8 @@
   (tui:redisplay tui)
   *tick*)
 
-(defun game-tick (tui)
+(defun game-tick (tui context)
+  (declare (ignore context))
   (%game-tick tui))
 
 (defun tui-main ()
@@ -313,28 +314,25 @@
          (*panel-water* *panel-bar-max*)
          (sand-view
            (make-instance 'sand-view
-                          :dimensions (tui:make-rectangle :x 0
-                                                          :y 0
-                                                          :cols *sand-width*
-                                                          :rows rows)))
+                          :dimensions (tui:make-rect :x 0
+                                                     :y 0
+                                                     :cols *sand-width*
+                                                     :rows rows)))
          (panel-view
            (make-instance 'panel-view
-                          :dimensions (tui:make-rectangle :x *sand-width*
-                                                          :y 0
-                                                          :cols (- *tui-width* *sand-width*)
-                                                          :rows rows)))
+                          :dimensions (tui:make-rect :x *sand-width*
+                                                     :y 0
+                                                     :cols (- *tui-width* *sand-width*)
+                                                     :rows rows)))
          (game-ui
            (make-instance 'game-ui :focused-window sand-view
                                    :windows (list sand-view panel-view)
                                    :event-handler #'tui-handle-event)))
     (if (or (< columns *tui-width*) (< rows 30))
-        (write-line "get a bigger terminal nerd")
+        (write-line "get a bigger terminal")
         (progn
           (tui:schedule-timer game-ui (tui:make-timer *tick* #'game-tick))
-          ;;(sb-sprof:start-profiling)
-          (tui:run game-ui)
-          ;;(sb-sprof:stop-profiling)
-          ))))
+          (tui:run game-ui)))))
 
 (defun main ()
   (if (member :slynk *features*)

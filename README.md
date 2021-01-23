@@ -14,4 +14,5 @@ n.b. `sand-game.lisp` features the color/timer functionality of the library and 
 - [x] unicode support (combining and fullwidth)
 - [x] basic terminal resizing support
 - [x] timers
-- [ ] widgets
+- [ ] better window management interface
+- [ ] documentation

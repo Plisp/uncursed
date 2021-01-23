@@ -2,6 +2,11 @@
 
 ;;; palette approximation
 
+(defun red (color) (ldb (byte 8 16) color))
+(defun green (color) (ldb (byte 8 8) color))
+(defun blue (color) (ldb (byte 8 0) color))
+(defun color (r g b) (+ (ash r 16) (ash g 8) b))
+
 (defparameter *xterm-256*
   (let ((colors (make-array 256 :element-type 'fixnum)))
     (loop :for r :below 6
@@ -12,13 +17,13 @@
                                                (+ 55 (* c 40))
                                                0)))
                                     (setf (aref colors (+ 16 (* r 36) (* g 6) b))
-                                          (+ (ash (cube-color r) 16)
-                                             (ash (cube-color g) 8)
-                                             (cube-color b)))))))
+                                          (color (cube-color r)
+                                                 (cube-color g)
+                                                 (cube-color b)))))))
     (loop :for shade :below 24
           :for c = (+ 8 (* shade 10))
           :do (setf (aref colors (+ 232 shade))
-                    (+ (ash c 16) (ash c 8) c)))
+                    (color c c c)))
     (setf (aref colors 00) #x000000)
     (setf (aref colors 01) #x800000)
     (setf (aref colors 02) #x008000)
@@ -36,10 +41,6 @@
     (setf (aref colors 14) #x00ffff)
     (setf (aref colors 15) #xffffff)
     colors))
-
-(defun red (color) (ldb (byte 8 16) color))
-(defun green (color) (ldb (byte 8 8) color))
-(defun blue (color) (ldb (byte 8 0) color))
 
 ;; Based on xterm, src/misc.c/allocateClosestRGB()
 (defun color-diff (a b)
@@ -59,11 +60,14 @@
                     best-diff diff))
         :finally (return best-color)))
 
-;;; palette modification - minimise damage by using 16-231 and hoping that orig_colors works
+;;; palette modification
+;;; - minimise damage by using 16-231 and hoping that orig_colors works
 
 (defvar *current-index* 16)
-(defvar *palette* (make-array 231 :element-type 'fixnum :initial-element most-positive-fixnum)
-  "Maps indexes 1-231 to their colors to save some sequences. Yes we only actually use 16-231.")
+(defvar *palette* (make-array 231 :element-type 'fixnum
+                                  :initial-element most-positive-fixnum)
+  "Maps indexes 1-231 to their colors to save some sequences.
+Yes we only actually use 16-231 as otherwise the user's custom colors get clobbered.")
 
 (defun lookup-color (color)
   (loop :for i :from 0

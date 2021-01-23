@@ -8,15 +8,14 @@
   (:export #:main))
 (in-package #:uncursed-shockwave)
 
-(defclass ui (tui:tui)
-  ())
+;;; logging from a remote slime session
 
-(defmethod tui:run :before ((tui ui))
-  (tui:enable-alternate-screen)
-  (tui:set-cursor-shape :invisible))
+(defvar *log*)
+(defun log* (o)
+  #+sbcl (sb-concurrency:send-message *log* o)
+  o)
 
-(defclass view (tui:standard-window)
-  ())
+;;; waves
 
 (defstruct wave
   (x 0 :type fixnum)
@@ -33,13 +32,6 @@
 
 (defstruct (triangle (:include wave))
   (orientation 0.0 :type single-float))
-
-(defvar *waves*)
-
-(defvar *log*)
-(defun log* (o)
-  #+sbcl (sb-concurrency:send-message *log* o)
-  o)
 
 (defgeneric present-wave (wave view))
 
@@ -70,12 +62,12 @@
                 (tui:put #\space y-high x (tui:make-style :bg (circle-color c))))
               (when (and (<= y-low view-rows) (<= 1 x view-cols))
                 (tui:put #\space y-low x (tui:make-style :bg (circle-color c)))))))
--
+
 (defmethod present-wave ((w triangle) view)
   (let* ((dimensions (tui:dimensions view))
          (view-rows (tui:rect-rows dimensions))
          (view-cols (tui:rect-cols dimensions))
-         (theta (mod (* (wave-radius w) (/ pi 16)) (* 2 pi)))
+         (theta (mod (* (wave-y w) (/ pi 16)) (* 2 pi)))
          (v1-x (truncate (+ (wave-x w) (* (wave-radius w) (cos theta)))))
          (v1-y (truncate (+ (wave-y w) (* (wave-radius w) (sin theta)))))
          (v2-x (truncate (+ (wave-x w) (* (wave-radius w) (cos (+ theta (* pi 2/3)))))))
@@ -96,104 +88,128 @@
         :do (tui:put #\space (max 1 (1+ (- (flame-y f) (random 8))))
                      x (tui:make-style :bg (flame-color f)))))
 
+;;; tui code
+
+(defclass ui (tui:tui)
+  ())
+
+(defmethod tui:run :before ((tui ui))
+  (tui:enable-alternate-screen)
+  (tui:set-cursor-shape :invisible))
+
+(defclass view (tui:standard-window)
+  ((waves :initform (make-array 0 :adjustable t :fill-pointer t)
+          :accessor waves
+          :type (vector wave))))
+
 (defmethod tui:present ((view view))
-  (loop :for wave :in *waves*
+  (loop :for wave :across (waves view)
         :do (present-wave wave view)))
 
 (defmethod tui:handle-resize ((tui ui))
-  (let ((window (tui:focused-window tui)))
-    (setf (tui:rect-cols (tui:dimensions window)) (tui:columns tui)
-          (tui:rect-rows (tui:dimensions window)) (tui:lines tui))
-    (setf *waves* (remove-if-not (lambda (w)
-                                   (and (<= 1 (wave-x w) (tui:columns tui))
-                                        (<= 1 (wave-y w) (tui:lines tui))))
-                                 *waves*))))
+  (let ((dimensions (tui:dimensions (tui:focused-window tui))))
+    (setf (tui:rect-cols dimensions) (tui:cols tui)
+          (tui:rect-rows dimensions) (tui:rows tui)
+          (fill-pointer (waves (tui:focused-window tui))) 0)))
 
 (defmethod tui:handle-key-event ((window view) tui event)
   nil)
 
-(defparameter *bonfire* nil)
-
 (defparameter *green-mod* 1.08)
 (defmethod tui:handle-mouse-event ((window view) tui button state line col &key)
   (case button
-    (:left (when (eq state :release) (push (make-circle :y line :x col) *waves*)))
+    (:left (when (eq state :release) (vector-push-extend (make-circle :y line :x col)
+                                                         (waves window))))
     (:middle (when (eq state :release) (setf *bonfire* (not *bonfire*))))
-    (:right (when (eq state :release) (push (make-triangle :y line :x col) *waves*)))
+    (:right (when (eq state :release) (vector-push-extend (make-triangle :y line :x col)
+                                                          (waves window))))
     (:wheel-up (setf *green-mod* (max 1.01 (- *green-mod* 0.03))))
     (:wheel-down (setf *green-mod* (min 1.08 (+ *green-mod* 0.03))))))
 
 (defun tui-handle-event (tui ev)
   (cond ((equal ev '(#\w :control))
-         (tui:stop tui))
-        ))
+         (tui:stop tui))))
+
+;;; tick logic
+
+(defparameter *bonfire* nil)
 
 (defparameter *tick* 0.05)
 
-(defun %tick (tui)
+(defgeneric update-wave (wave view-bounds))
+
+(defmethod update-wave ((w circle) view-bounds)
+  (incf (circle-radius w))
+  ;; remove if radius exceeds screen diagonal
+  (unless (> (circle-radius w)
+             (sqrt (+ (expt (tui:rect-cols view-bounds) 2)
+                      (expt (tui:rect-rows view-bounds) 2))))
+    w))
+
+(defmethod update-wave ((w triangle) view-bounds)
+  (decf (triangle-y w))
+  (setf (triangle-radius w) (max (- (triangle-radius w) (- (random 3) 1))
+                                 0))
+  (unless (> (triangle-radius w)
+             (sqrt (+ (expt (tui:rect-cols view-bounds) 2)
+                      (expt (tui:rect-rows view-bounds) 2))))
+    w))
+
+(defmethod update-wave ((w flame) view-bounds)
+  (incf (flame-x w) (- (random 5) 2))
+  (let ((prev (flame-radius w)))
+    (if (and (not (flame-dying w))
+             (< prev 20))
+        (incf (flame-radius w) (truncate 6 (1+ (flame-radius w))))
+        (progn
+          (setf (flame-dying w) t)
+          (decf (flame-radius w) 1))))
+  ;; remove waves that have drifted out of bounds
+  (unless (or (<= (flame-radius w) 0)
+              (<= (flame-y w) 1))
+    (decf (flame-y w) 1)
+    w))
+
+(defun %tick (tui waves)
   (let ((view-bounds (tui:dimensions (tui:focused-window tui))))
+    ;; create new flames for bonfire
     (when *bonfire*
       (loop :repeat 9
-            :do (push (make-flame
-                       :y (tui:rect-rows view-bounds)
-                       :x (+ (- (truncate (tui:rect-cols view-bounds) 2) 2)
-                             (random 4)))
-                      *waves*)))
-    (loop :with new-waves
-          :for w :in *waves*
+            :do (vector-push-extend
+                 (make-flame :y (tui:rect-rows view-bounds)
+                             :x (+ (- (truncate (tui:rect-cols view-bounds) 2) 2)
+                                   (random 4)))
+                 waves)))
+    ;; update wave positions
+    (loop :with copy = (copy-seq waves)
+            :initially (setf (fill-pointer waves) 0)
+          :for w :across copy
           :do (let ((old (wave-color w)))
                 (setf (wave-color w)
-                      (+ (ash (truncate (uncursed-sys::red old) 1.04) 16)
-                         (ash (truncate (uncursed-sys::green old) *green-mod*) 8)
-                         (ash (truncate (uncursed-sys::blue old) 1.00) 0))))
-              (etypecase w
-                (circle
-                 (incf (circle-radius w))
-                 (unless (> (circle-radius w)
-                            (sqrt (+ (expt (tui:rect-cols view-bounds) 2)
-                                     (expt (tui:rect-rows view-bounds) 2))))
-                   (push w new-waves)))
-                (triangle
-                 (setf (triangle-radius w) (max 0 (- (triangle-radius w)
-                                                     (- (random 3) 1))))
-                 (decf (triangle-y w))
-                 (unless (> (triangle-radius w)
-                            (sqrt (+ (expt (tui:rect-cols view-bounds) 2)
-                                     (expt (tui:rect-rows view-bounds) 2))))
-                   (push w new-waves)))
-                (flame
-                 (incf (flame-x w) (- (random 5) 2))
-                 (let ((prev (flame-radius w)))
-                   (if (and (not (flame-dying w))
-                            (< prev 20))
-                       (incf (flame-radius w) (truncate 6 (1+ (flame-radius w))))
-                       (progn
-                         (setf (flame-dying w) t)
-                         (decf (flame-radius w) 1))))
-                 (unless (or (<= (flame-radius w) 0)
-                             (<= (flame-y w) 1))
-                   (decf (flame-y w) 1)
-                   (push w new-waves))))
-          :finally (setf *waves* new-waves)))
+                      (uncursed-sys::color
+                       (truncate (uncursed-sys::red old) 1.04)
+                       (truncate (uncursed-sys::green old) *green-mod*)
+                       (truncate (uncursed-sys::blue old) 1.00))))
+              (alexandria:when-let (w (update-wave w view-bounds))
+                (vector-push w waves))))
   *tick*)
 
-(defun tick (tui)
-  (%tick tui))
+;; livecoding hack
+(defun tick (tui waves)
+  (%tick tui waves))
 
 (defun tui-main ()
   (let* ((dimensions (tui:terminal-dimensions))
          (view
            (make-instance 'view
-                          :dimensions (tui:make-rectangle :x 0
-                                                          :y 0
-                                                          :rows (car dimensions)
-                                                          :cols (cdr dimensions))))
+                          :dimensions (tui:make-rect :x 0 :y 0
+                                                     :rows (car dimensions)
+                                                     :cols (cdr dimensions))))
          (ui
            (make-instance 'ui :focused-window view
                               :windows (list view)
                               :event-handler #'tui-handle-event)))
-    (setf *waves* (list))
-    (tui:schedule-timer ui (tui:make-timer *tick* #'tick))
+    (tui:schedule-timer ui (tui:make-timer *tick* #'tick :context (waves view)))
     (tui:run ui)
     #+sbcl
     (when (boundp '*log*)

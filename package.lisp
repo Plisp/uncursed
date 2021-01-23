@@ -13,8 +13,8 @@
            #:style-difference
            #:*default-style*
 
-           #:rectangle
-           #:make-rectangle #:copy-rectangle
+           #:rect
+           #:make-rect #:copy-rect
            #:rect-x #:rect-y #:rect-rows #:rect-cols
 
            ;; util.lisp
@@ -44,7 +44,7 @@
   (:local-nicknames (:sys :uncursed-sys))
   (:export #:tui-base
            ;; methods
-           #:lines #:columns
+           #:rows #:cols
            #:windows
            #:got-winch
            #:run
@@ -55,7 +55,7 @@
            #:window
            ;; methods
            #:dimensions
-           #:win-focused-p
+           #:focused-p
            #:present
 
            #:cell

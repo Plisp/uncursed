@@ -1,4 +1,4 @@
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;;; internals
 ;;
 
@@ -253,7 +253,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
 * (CHARACTER [modifiers]...) - modifiers include :shift, :alt, :control and :meta
 * :f1-20, :home, :end, :insert, :delete, :up/:down/:left/:right-arrow, :page-down, :page-up
 * (:function/special [modifiers]...) - above but with modifiers
-* (:left/middle/right/wheel-up/down/left/right/hover :click/release/drag ROW COL [modifiers]...)
+* (:left/middle/right/wheel-up/down/left/right/hover :click/release/drag ROW COL [mods]...)
 * (:unknown [key-sequence]...)
 Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
   (flet ((adjusted-c0-p (code)
@@ -280,7 +280,7 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
       ;; we have SS3 or CSI
       (let ((third (read-char)))
         (ecase second ; TODO use terminfo if needed. currently seems unreliable
-          (#\O ; following the VT220 convention, function keys begin with SS3 on xterms. but why.
+          (#\O ; VT220 convention: function keys begin with SS3 on xterms. but why.
            (case third
              (#\P :f1) (#\Q :f2) (#\R :f3) (#\S :f4)
              (otherwise (list :unknown :ss3 third))))
@@ -312,6 +312,7 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
               (nthcdr 4 event))))
 
 (defun read-event-timeout (&optional timeout)
+  "Wait up to timeout seconds waiting for input, returning NIL on timeout or an event."
   #+sbcl (if timeout
              (handler-case
                  (sb-sys:with-deadline (:seconds timeout)
@@ -501,8 +502,8 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 (defun set-background (r g b)
   (format *terminal-io* "~c[48;2;~d;~d;~dm" #\esc r g b))
 
-(defstruct (rectangle (:conc-name rect-))
-  (x (error "rectangle X not provided") :type fixnum)
-  (y (error "rectangle Y not provided") :type fixnum)
-  (rows (error "rectangle ROWS not provided") :type fixnum)
-  (cols (error "rectangle COLS not provided") :type fixnum))
+(defstruct (rect (:conc-name rect-))
+  (x (error "rect X not provided") :type fixnum)
+  (y (error "rect Y not provided") :type fixnum)
+  (rows (error "rect ROWS not provided") :type fixnum)
+  (cols (error "rect COLS not provided") :type fixnum))
