@@ -6,6 +6,9 @@
 
 #+unix
 (progn
+  (include "errno.h")
+  (cvar ("errno" c-errno) :int)
+
   (include "signal.h")
   (constant (c-sigwinch "SIGWINCH"))
 
@@ -18,6 +21,17 @@
            (c-ws-cols "ws_col" :type :unsigned-short))
   (constant (c-get-winsz "TIOCGWINSZ"))
   (constant (c-set-attributes-now "TCSANOW"))
+
+  (include "sys/select.h") ; TODO conditionalize
+  (cstruct c-fd-set "fd_set")
+
+  (include "time.h")
+  (ctype c-time "time_t")
+  (include "sys/time.h")
+  (ctype c-usecs "suseconds_t")
+  (cstruct c-timeval "struct timeval"
+           (c-tv-sec "tv_sec" :type c-time)
+           (c-tv-usec "tv_usec" :type c-usecs)) ; microseconds
 
   (include "termios.h")
   (ctype c-tcflag "tcflag_t")

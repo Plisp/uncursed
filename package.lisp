@@ -4,6 +4,7 @@
   (:use :cl :alexandria)
   (:export #:uncursed-error
            #:syscall-error
+           #:error-syscall-error
 
            #:red #:green #:blue
 
@@ -13,15 +14,11 @@
            #:style-difference
            #:*default-style*
 
-           #:rect
-           #:make-rect #:copy-rect
-           #:rect-x #:rect-y #:rect-rows #:rect-cols
-
-           ;; util.lisp
            #:character-width #:*character-widths*
            #:display-width
            #:setup-terminal
            #:restore-terminal
+
            #:terminal-dimensions
            #:enable-mouse #:disable-mouse
            #:enable-focus-tracking #:disable-focus-tracking
@@ -40,9 +37,49 @@
            ))
 
 (defpackage :uncursed
-  (:use :cl :uncursed-sys)
+  (:use :cl)
+  (:import-from :uncursed-sys
+                #:uncursed-error
+
+                #:character-width #:*character-widths*
+                #:display-width
+                #:terminal-dimensions
+                #:enable-mouse #:disable-mouse
+                #:enable-focus-tracking #:disable-focus-tracking
+                #:enable-alternate-screen #:disable-alternate-screen
+                #:mouse-event-p
+                #:set-cursor-shape
+
+                #:red #:green #:blue
+                #:style
+                #:make-style #:copy-style
+                #:fg #:bg #:boldp #:italicp #:reversep #:underlinep
+                #:style-difference
+                #:*default-style*)
   (:local-nicknames (:sys :uncursed-sys))
-  (:export #:tui-base
+  (:export #:uncursed-error
+
+           #:character-width #:*character-widths*
+           #:display-width
+           #:terminal-dimensions
+           #:enable-mouse #:disable-mouse
+           #:enable-focus-tracking #:disable-focus-tracking
+           #:enable-alternate-screen #:disable-alternate-screen
+           #:mouse-event-p
+           #:set-cursor-shape
+
+           #:red #:green #:blue
+           #:style
+           #:make-style #:copy-style
+           #:fg #:bg #:boldp #:italicp #:reversep #:underlinep
+           #:style-difference
+           #:*default-style*
+           ;;; uncursed.lisp
+           #:rect
+           #:make-rect #:copy-rect
+           #:rect-x #:rect-y #:rect-rows #:rect-cols
+
+           #:tui-base
            ;; methods
            #:rows #:cols
            #:windows
@@ -51,6 +88,7 @@
            #:stop
            #:handle-event
            #:redisplay
+           #:wakeup
 
            #:window
            ;; methods
@@ -97,7 +135,3 @@
 
            #:curved-box-border
            ))
-
-(eval-when (:compile-toplevel :load-toplevel)
-  (do-external-symbols (s :uncursed-sys)
-    (export s :uncursed)))

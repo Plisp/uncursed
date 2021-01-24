@@ -2,6 +2,12 @@
 
 ;;; basic definitions
 
+(defstruct (rect (:conc-name rect-))
+  (x (error "rect X not provided") :type fixnum)
+  (y (error "rect Y not provided") :type fixnum)
+  (rows (error "rect ROWS not provided") :type fixnum)
+  (cols (error "rect COLS not provided") :type fixnum))
+
 (defclass window ()
   ((%dimensions :initarg :dimensions
                 :initform (error "window dimensions not provided")
@@ -38,6 +44,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
 
 (defgeneric redisplay (tui))
 (defgeneric handle-event (tui ev))
+(defgeneric handle-resize (tui))
 
 ;; sigwinch handling - redrawn on next keypress.
 
@@ -64,11 +71,11 @@ May only be called from within the dynamic-extent of a call to RUN."))
       (setf (rows tui) rows
             (cols tui) cols))
     (ti:set-terminal (uiop:getenv "TERM"))
-    (setf (%termios tui) (setup-terminal 0))
+    (setf (%termios tui) (sys:setup-terminal 0))
     (unwind-protect
          (call-next-method)
       (when (%termios tui)
-        (restore-terminal (%termios tui) 0)
+        (sys:restore-terminal (%termios tui) 0)
         (setf (%termios tui) nil)))))
 
 (defclass cell ()
@@ -127,9 +134,12 @@ setf-ing the style copies over the new attributes into the existing cell-style."
    (%use-palette :initform nil
                  :initarg :use-palette
                  :accessor use-palette
-                 :type (member t nil :approximate))))
+                 :type (member t nil :approximate))
+   (%wakeup-pipe :initform (cffi:null-pointer)
+                 :accessor wakeup-pipe
+                 :type cffi:foreign-pointer)))
 
-(define-condition window-bounds-error (uncursed-error)
+(define-condition window-bounds-error (sys:uncursed-error)
   ((coordinate :initarg :coordinate
                :reader window-bounds-error-coordinate
                :type integer)
@@ -146,7 +156,7 @@ setf-ing the style copies over the new attributes into the existing cell-style."
                      (window-bounds-error-window condition))))
   (:documentation "Signaled if an attempt is made to index outside a window's bounds"))
 
-(define-condition wide-char-overwrite-error (uncursed-error)
+(define-condition wide-char-overwrite-error (sys:uncursed-error)
   ((y :initarg :y
       :reader wide-char-overwrite-error-y)
    (x :initarg :x
@@ -160,8 +170,6 @@ setf-ing the style copies over the new attributes into the existing cell-style."
                      (wide-char-overwrite-error-buffer condition))))
   (:documentation "Signaled if an attempt is made to overwrite a wide character."))
 
-(defgeneric handle-resize (tui))
-
 (defclass standard-window (window)
   ())
 
@@ -170,6 +178,12 @@ setf-ing the style copies over the new attributes into the existing cell-style."
 arguments :shift, :alt, :control and :meta."))
 (defgeneric handle-key-event (window tui event)
   (:documentation "Interface may change."))
+
+(defun wakeup (tui)
+  "Wakes up TUI in a thread-safe manner."
+  (cffi:with-foreign-object (buf :char)
+    (sys::c-write (cffi:foreign-aref (wakeup-pipe tui) '(:array :int 2) 1)
+                  buf 1)))
 
 (defvar *put-buffer*)
 (defvar *put-window*)
@@ -427,7 +441,7 @@ arguments :shift, :alt, :control and :meta."))
     (let ((*put-buffer* canvas))
       (map () #'present (windows tui)))
     ;; render diff to terminal
-    (set-style *default-style* (use-palette tui))
+    (sys:set-style *default-style* (use-palette tui))
     (loop :with diff = (buffer-diff screen canvas)
           :with current-style = *default-style*
           :with last-pos
@@ -437,8 +451,8 @@ arguments :shift, :alt, :control and :meta."))
                 (or (and last-width last-pos
                          (= (car pos) (car last-pos))
                          (= (cdr pos) (+ (cdr last-pos) last-width)))
-                    (set-cursor-position (car pos) (cdr pos)))
-                (set-style-from-old current-style (cell-style cell) (use-palette tui))
+                    (sys:set-cursor-position (car pos) (cdr pos)))
+                (sys:set-style-from-old current-style (cell-style cell) (use-palette tui))
                 (setf current-style (cell-style cell))
                 (write-string (cell-string cell))
                 (setf last-pos pos
@@ -446,6 +460,13 @@ arguments :shift, :alt, :control and :meta."))
           :finally (force-output))
     ;; swap buffers
     (rotatef screen canvas)))
+
+(defun dispatch-event (tui event)
+  (or (if (mouse-event-p event)
+          (loop :for window :in (copy-list (windows tui))
+                  :thereis (dispatch-mouse-event window tui event))
+          (handle-key-event (focused-window tui) tui event))
+      (funcall (event-handler tui) tui event)))
 
 (defun dispatch-mouse-event (window tui event)
   (destructuring-bind (button state line col &rest modifiers) event
@@ -460,6 +481,8 @@ arguments :shift, :alt, :control and :meta."))
               (meta (member :meta modifiers)))
           (handle-mouse-event window tui button state relative-line relative-column
                               :shift shift :alt alt :control control :meta meta))))))
+
+;;; timers
 
 (defclass timer ()
   ((%callback :initarg :callback
@@ -494,72 +517,71 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                    (screen screen)
                    (timers timers)
                    (rows rows)
-                   (cols cols)
-                   (focused-window focused-window)
-                   (event-handler event-handler))
+                   (cols cols))
       tui
     (setf canvas (make-array (list rows cols)))
     (setf screen (make-array (list rows cols)))
     (loop :for idx :below (array-total-size canvas)
           :do (setf (row-major-aref canvas idx) (make-instance 'cell)
                     (row-major-aref screen idx) (make-instance 'cell)))
-    (clear-screen)
+    (sys:clear-screen)
     (enable-mouse)
-    (catch-sigwinch)
-    (unwind-protect
-         (catch 'tui-quit
-           (loop
-             (redisplay tui)
-             (let* ((before-read (get-internal-real-time))
-                    (next-timer (pop timers))
-                    (next-timeout (when next-timer (timer-interval next-timer)))
-                    (event (if next-timer
-                               (read-event-timeout next-timeout)
-                               (read-event))))
-               (when (got-winch tui)
-                 (handle-resize tui))
-               ;;
-               (if event
-                   ;; serve the event to one window, or the TUI catchall
-                   (let ((now (get-internal-real-time)))
-                     (push next-timer timers)
-                     (map () #'(lambda (timer)
-                                 (when timer ;TIMER=NIL?
-                                   (setf (timer-interval timer)
-                                         (max (- (timer-interval timer)
-                                                 (/ (- now before-read)
-                                                    internal-time-units-per-second))
-                                              0))))
-                          timers)
-                     ;; TODO mechanism for closing windows and creating them during
-                     ;; event handling
-                     (or (if (mouse-event-p event)
-                             (loop :for window :in (copy-list (windows tui))
-                                     :thereis (dispatch-mouse-event window tui event))
-                             (handle-key-event focused-window tui event))
-                         (funcall event-handler tui event)))
-                   ;; process expired timer
-                   (progn
-                     (map () #'(lambda (timer)
+    (sys:catch-sigwinch)
+    (cffi:with-foreign-object (wakeup-pipe :int 2)
+      (when (minusp (sys::pipe wakeup-pipe))
+        (sys:error-syscall-error "pipe failed"))
+      (setf (wakeup-pipe tui) wakeup-pipe)
+      (unwind-protect
+           (catch 'tui-quit
+
+             (loop
+               (redisplay tui)
+               (let* ((before-read (get-internal-real-time))
+                      (next-timer (pop timers))
+                      (next-timeout (when next-timer (timer-interval next-timer)))
+                      (event (if next-timer
+                                 (sys:read-event-timeout next-timeout)
+                                 (sys:read-event))))
+                 (when (got-winch tui)
+                   (handle-resize tui))
+                 ;;
+                 (if event
+                     ;; serve the event to one window, or the TUI catchall
+                     (let ((now (get-internal-real-time)))
+                       (when next-timer
+                         (push next-timer timers))
+                       (map () (lambda (timer)
+                                 (setf (timer-interval timer)
+                                       (max (- (timer-interval timer)
+                                               (/ (- now before-read)
+                                                  internal-time-units-per-second))
+                                            0)))
+                            timers)
+                       (dispatch-event tui event))
+                     (progn
+                       (map () (lambda (timer)
                                  (decf (timer-interval timer) next-timeout))
-                          timers)
-                     (multiple-value-bind (next-interval new-context)
-                         (funcall (timer-callback next-timer)
-                                  tui
-                                  (timer-context next-timer))
-                       (when next-interval
-                         (setf (timer-interval next-timer) next-interval)
-                         (schedule-timer tui next-timer))
-                       (when new-context
-                         (setf (timer-context next-timer) new-context))))))))
-      (when (eq (use-palette tui) t)
-        (sys::reset-colors)) ; hope
-      (disable-mouse)
-      (set-cursor-shape :block)
-      (disable-alternate-screen)
-      (loop :while (read-event-timeout 0)) ; drain events
-      (reset-sigwinch)
-      (finish-output))))
+                            timers)
+                       ;; process expired timer
+                       (multiple-value-bind (next-interval new-context)
+                           (funcall (timer-callback next-timer)
+                                    tui
+                                    (timer-context next-timer))
+                         (when next-interval
+                           (setf (timer-interval next-timer) next-interval)
+                           (schedule-timer tui next-timer))
+                         (when new-context
+                           (setf (timer-context next-timer) new-context))))))))
+        (when (eq (use-palette tui) t)
+          (sys::reset-colors)) ; hope
+        (disable-mouse)
+        (set-cursor-shape :block)
+        (disable-alternate-screen)
+        (loop :while (sys:read-event-timeout 0)) ; drain events
+        (sys:reset-sigwinch)
+        (sys::c-close (cffi:foreign-aref (wakeup-pipe tui) '(:array :int 2) 0))
+        (sys::c-close (cffi:foreign-aref (wakeup-pipe tui) '(:array :int 2) 1))
+        (finish-output)))))
 
 (defmethod stop ((tui tui))
   (throw 'tui-quit nil))

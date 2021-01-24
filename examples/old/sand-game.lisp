@@ -267,7 +267,7 @@
   ;; win
   (when (>= *score* 9999)
     (ti:tputs ti:clear-screen)
-    (tui:set-cursor-position 10 10)
+    (uncursed-sys:set-cursor-position 10 10)
     (write-string "                    .-'''-.
                    '   _    \
                  /   /` '.   \                              .--.   _..._

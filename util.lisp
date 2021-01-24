@@ -47,24 +47,9 @@ backing FD. Returns NIL on failure."
       (return-from terminal-dimensions (cons env-lines env-columns))))
   *fallback-terminal-dimensions*)
 
-;;; input
+;;; input setup
 
 ;; utilities
-
-;; (defun fd-stream-p (stream)
-;;   #+sbcl (sb-sys:fd-stream-p stream)
-;;   )
-
-;; (defun stream-fd (stream)
-;;   #+sbcl (sb-sys:fd-stream-fd stream)
-;;   )
-
-;; (defun coerce-stream-to-fd (stream)
-;;   (when (typep stream 'synonym-stream)
-;;     (setf stream (symbol-value (synonym-stream-symbol stream))))
-;;   (if (fd-stream-p stream)
-;;       (stream-fd stream)
-;;       (error-fd-indeterminate "could not determine fd for ~s" stream)))
 
 (defun enable-mouse ()
   (format *terminal-io* "~c[?1006h~c[?1003h" #\esc #\esc))
@@ -311,6 +296,31 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
        (every (lambda (elt) (member elt '(:shift :alt :control :meta)))
               (nthcdr 4 event))))
 
+;;; select TODO
+
+(cffi:defcfun ("close" c-close) :int
+  (fd :int))
+
+(cffi:defcfun ("write" c-write) :long
+  (fd :int)
+  (buf :pointer)
+  (n :long))
+
+(cffi:defcfun ("read" c-read) :long
+  (fd :int)
+  (buf :pointer)
+  (n :long))
+
+(cffi:defcfun "pipe" :int
+  (pipefd (:pointer :int)))
+
+(cffi:defcfun "select" :int
+  (nfds :int)
+  (readfds (:pointer (:struct c-fd-set)))
+  (writefds (:pointer (:struct c-fd-set)))
+  (exceptfds (:pointer (:struct c-fd-set)))
+  (timeout (:pointer (:struct c-timeval))))
+
 (defun read-event-timeout (&optional timeout)
   "Wait up to timeout seconds waiting for input, returning NIL on timeout or an event."
   #+sbcl (if timeout
@@ -399,7 +409,7 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
         (ti:tputs ti:cursor-visible)
         (format *terminal-io* "~c[~d q" #\esc (if blink-p (1- arg) arg)))))
 
-;; styling
+;;; attributes
 
 (defstruct (style (:conc-name nil))
   (fg nil :type (or null (integer #x000000 #xffffff)))
@@ -501,9 +511,3 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 
 (defun set-background (r g b)
   (format *terminal-io* "~c[48;2;~d;~d;~dm" #\esc r g b))
-
-(defstruct (rect (:conc-name rect-))
-  (x (error "rect X not provided") :type fixnum)
-  (y (error "rect Y not provided") :type fixnum)
-  (rows (error "rect ROWS not provided") :type fixnum)
-  (cols (error "rect COLS not provided") :type fixnum))

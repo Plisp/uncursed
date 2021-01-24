@@ -8,6 +8,7 @@
   :serial t
   :components ((:file "package")
                (:cffi-grovel-file "grovel")
+               (:cffi-wrapper-file "wrappers")
                (:file "condition")
                (:file "hacks")
                (:file "util")
