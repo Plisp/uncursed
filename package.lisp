@@ -83,7 +83,6 @@
            ;; methods
            #:rows #:cols
            #:windows
-           #:got-winch
            #:run
            #:stop
            #:handle-event

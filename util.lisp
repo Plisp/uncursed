@@ -298,9 +298,6 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 
 ;;; select TODO
 
-(defun set-nonblock (fd)
-  (cffi:foreign-funcall "fcntl" :int fd :int c-fsetfl :int c-ononblock :int))
-
 (cffi:defcfun ("close" c-close) :int
   (fd :int))
 
@@ -317,12 +314,36 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 (cffi:defcfun "pipe" :int
   (pipefd (:pointer :int)))
 
+(defun read-fd (pipe)
+  (cffi:foreign-aref pipe '(:array :int 2) 0))
+
+(defun write-fd (pipe)
+  (cffi:foreign-aref pipe '(:array :int 2) 1))
+
+(defun set-nonblock (fd)
+  (cffi:foreign-funcall "fcntl" :int fd :int c-fsetfl :int c-ononblock :int))
+
+(defun non-blocking-pipe (pipe)
+  (when (minusp (pipe pipe))
+    (error-syscall-error "pipe failed"))
+  (when (minusp (set-nonblock (read-fd pipe)))
+    (error-syscall-error "fcntl failed"))
+  (when (minusp (set-nonblock (write-fd pipe)))
+    (error-syscall-error "fcntl failed")))
+
+(defun pipe-cleanup (pipe)
+  (c-close (read-fd pipe))
+  (c-close (write-fd pipe)))
+
 (cffi:defcfun "select" :int
   (nfds :int)
   (readfds (:pointer (:struct c-fd-set)))
   (writefds (:pointer (:struct c-fd-set)))
   (exceptfds (:pointer (:struct c-fd-set)))
   (timeout (:pointer (:struct c-timeval))))
+
+(defun fd-setp (fd set)
+  (plusp (fd-isset fd set)))
 
 (defun read-event-timeout (&optional timeout)
   "Wait up to timeout seconds waiting for input, returning NIL on timeout or an event."
@@ -353,30 +374,30 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 
 ;;; sigwinch
 
-(defvar *got-sigwinch* nil)
-
 (defconstant +sigwinch+ c-sigwinch
   "Signal number of SIGWINCH.")
 
-(let (#+ccl sigwinch-thread)
-  (defun catch-sigwinch ()
-    "Enables handling SIGWINCH. May fail silently."
-    #+ccl (setf sigwinch-thread
+#+ccl (defvar *sigwinch-thread* nil)
+(defun catch-sigwinch (write-pipe)
+  "Enables handling SIGWINCH. May fail silently."
+  (cffi:with-foreign-object (buf :char)
+    #+ccl (setf *sigwinch-thread*
                 (ccl:process-run-function "sigwinch thread"
                                           (lambda ()
                                             (loop
                                               (ccl:wait-for-signal 28 +sigwinch+)
-                                              (setf *got-sigwinch* t)))))
+                                              (c-write write-pipe buf 1)))))
     #+ecl (ext:set-signal-handler +sigwinch+ (lambda () (setf *got-sigwinch* t)))
     #+sbcl (sb-sys:enable-interrupt +sigwinch+
                                     (lambda (signo info ucontext)
                                       (declare (ignore signo info ucontext))
-                                      (setf *got-sigwinch* t))))
+                                      (c-write write-pipe buf 1)))))
 
-  (defun reset-sigwinch ()
-    #+ccl (ccl:process-kill sigwinch-thread)
-    #+ecl (ext:set-signal-handler +sigwinch+ :default)
-    #+sbcl (sb-sys:enable-interrupt +sigwinch+ :default)))
+(defun reset-sigwinch ()
+  #+ccl (progn (ccl:process-kill *sigwinch-thread*)
+               (setf *sigwinch-thread* nil))
+  #+ecl (ext:set-signal-handler +sigwinch+ :default)
+  #+sbcl (sb-sys:enable-interrupt +sigwinch+ :default))
 
 ;;; misc
 

@@ -27,7 +27,7 @@
   (tui:enable-alternate-screen)
   (tui:set-cursor-shape :invisible))
 
-(defmethod tui:handle-resize ((tui game-ui))
+(defmethod tui:handle-resize progn ((tui game-ui))
   (when (or (< (tui:cols tui) *tui-width*) (< (tui:rows tui) 30))
     (dotimes (i 10)
       (print "get a bigger terminal"))

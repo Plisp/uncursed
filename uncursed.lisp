@@ -34,8 +34,8 @@
              :documentation "Windows in drawing order.")
    (%termios :initform nil
              :accessor %termios)
-   (%got-winch :initform nil
-               :accessor got-winch)
+   (%winch-pipe :initform nil
+                :accessor %winch-pipe)
    (%wakeup-pipe :initform nil
                  :accessor %wakeup-pipe)))
 
@@ -46,37 +46,20 @@ May only be called from within the dynamic-extent of a call to RUN."))
 
 (defgeneric redisplay (tui))
 (defgeneric handle-event (tui ev))
-(defgeneric handle-resize (tui))
-
-(defun read-fd (pipe)
-  (check-type pipe cffi:foreign-pointer)
-  (cffi:foreign-aref pipe '(:array :int 2) 0))
-
-(defun write-fd (pipe)
-  (check-type pipe cffi:foreign-pointer)
-  (cffi:foreign-aref pipe '(:array :int 2) 1))
+(defgeneric handle-resize (tui)
+  (:documentation "Called when SIGWINCH is caught (the terminal window is resized).")
+  (:method-combination progn :most-specific-last))
 
 (defun wakeup (tui)
   "Wakes up TUI in a thread-safe manner."
   (cffi:with-foreign-object (buf :char)
-    (when (minusp (sys::c-write (write-fd (%wakeup-pipe tui)) buf 1))
+    (when (minusp (sys::c-write (sys::write-fd (%wakeup-pipe tui)) buf 1))
       (sys:error-syscall-error "write failed"))))
 
-;; sigwinch handling - redrawn on next keypress.
-
-(defmethod got-winch :before ((tui tui-base))
-  ;; window resized, update dimensions
-  ;; this needs to happen after event is read (not in middle!),
-  ;; so next event will repaint with updated dimensions
-  (when sys::*got-sigwinch*
-    (let ((dimensions (terminal-dimensions)))
-      (setf (rows tui) (car dimensions)
-            (cols tui) (cdr dimensions)
-            (got-winch tui) t
-            sys::*got-sigwinch* nil))))
-
-(defmethod handle-resize :after ((tui tui-base))
-  (setf (got-winch tui) nil))
+(defmethod handle-resize progn ((tui tui-base))
+  (let ((dimensions (terminal-dimensions)))
+    (setf (rows tui) (car dimensions)
+          (cols tui) (cdr dimensions))))
 
 ;; our only responsibilities at this level
 
@@ -88,23 +71,23 @@ May only be called from within the dynamic-extent of a call to RUN."))
             (cols tui) cols))
     (ti:set-terminal (uiop:getenv "TERM"))
     (setf (%termios tui) (sys:setup-terminal 0))
-    (cffi:with-foreign-object (wakeup-pipe :int 2)
-      (if (minusp (sys::pipe wakeup-pipe)) ; TODO maybe abstract this? is it even worth it
-          (sys:error-syscall-error "pipe failed")
-          (setf (%wakeup-pipe tui) wakeup-pipe))
-      (when (minusp (sys::set-nonblock (read-fd wakeup-pipe)))
-        (sys:error-syscall-error "fcntl failed"))
-      (when (minusp (sys::set-nonblock (write-fd wakeup-pipe)))
-        (sys:error-syscall-error "fcntl failed"))
+    (cffi:with-foreign-objects ((wakeup-pipe :int 2)
+                                (winch-pipe :int 2))
+      (sys::non-blocking-pipe winch-pipe)
+      (setf (%winch-pipe tui) winch-pipe)
+      (sys::non-blocking-pipe wakeup-pipe)
+      (setf (%wakeup-pipe tui) wakeup-pipe)
       (unwind-protect
            (call-next-method)
         (alexandria:when-let (termios (%termios tui))
           (sys:restore-terminal termios 0)
           (setf (%termios tui) nil))
         ;; note if ^ fails, this will not run. But in that case we're screwed anyways
+        (alexandria:when-let (pipe (%winch-pipe tui))
+          (sys::pipe-cleanup pipe)
+          (setf (%winch-pipe tui) nil))
         (alexandria:when-let (pipe (%wakeup-pipe tui))
-          (sys::c-close (read-fd pipe))
-          (sys::c-close (write-fd pipe))
+          (sys::pipe-cleanup pipe)
           (setf (%wakeup-pipe tui) nil))))))
 
 (defclass cell ()
@@ -211,7 +194,7 @@ arguments :shift, :alt, :control and :meta."))
 ;; note that triple-width is rare enough (e.g. three-em-dash) and terminal support is
 ;; so lacking that there's no point supporting it
 (defun put (char line col &optional style
-                                    (put-buffer *put-buffer*) (put-window *put-window*))
+                            (put-buffer *put-buffer*) (put-window *put-window*))
   (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
   #-sbcl (check-type put-buffer buffer)
   (check-type put-window window)
@@ -279,7 +262,7 @@ arguments :shift, :alt, :control and :meta."))
     width))
 
 (defun puts (string line col &optional style
-                                       (put-buffer *put-buffer*) (put-window *put-window*))
+                               (put-buffer *put-buffer*) (put-window *put-window*))
   (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
   (check-type put-buffer buffer)
   (check-type put-window window)
@@ -425,7 +408,7 @@ arguments :shift, :alt, :control and :meta."))
   (let ((*put-window* window))
     (call-next-method)))
 
-(defmethod handle-resize :before ((tui tui))
+(defmethod handle-resize progn ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen)
                    (rows rows)
@@ -547,8 +530,10 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
   (multiple-value-bind (seconds decimal)
       (truncate timeout)
     (let ((subseconds (truncate (* decimal 1000000)))) ; usecs
-      (setf (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-sec) seconds
-            (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-usec) subseconds))))
+      (setf (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-sec)
+            seconds
+            (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-usec)
+            subseconds))))
 
 (defmethod run ((tui tui))
   (with-accessors ((canvas canvas)
@@ -556,7 +541,8 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                    (timers timers)
                    (rows rows)
                    (cols cols)
-                   (wakeup-pipe %wakeup-pipe))
+                   (wakeup-pipe %wakeup-pipe)
+                   (winch-pipe %winch-pipe))
       tui
     (setf canvas (make-array (list rows cols)))
     (setf screen (make-array (list rows cols)))
@@ -565,7 +551,7 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                     (row-major-aref screen idx) (make-instance 'cell)))
     (sys:clear-screen)
     (enable-mouse)
-    (sys:catch-sigwinch)
+    (sys:catch-sigwinch (sys::write-fd winch-pipe))
     (cffi:with-foreign-objects ((timeval '(:struct sys::c-timeval))
                                 (fd-set '(:struct sys::c-fd-set))
                                 (buf :char 1))
@@ -578,7 +564,8 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                       timeout)
                  (sys::fd-zero fd-set)
                  (sys::fd-set 0 fd-set)
-                 (sys::fd-set (read-fd wakeup-pipe) fd-set)
+                 (sys::fd-set (sys::read-fd wakeup-pipe) fd-set)
+                 (sys::fd-set (sys::read-fd winch-pipe) fd-set)
                  (labels ((update-timeouts ()
                             (let ((now (get-internal-real-time)))
                               (map () (lambda (timer)
@@ -595,27 +582,29 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                    (when next-timer
                      (write-seconds-to-timeval (timer-interval next-timer) timeval)
                      (setf timeout timeval))
-                   (let ((ret (sys::select (1+ (read-fd wakeup-pipe)) fd-set
+                   (let ((ret (sys::select (1+ (max (sys::read-fd wakeup-pipe)
+                                                    (sys::read-fd winch-pipe)))
+                                           fd-set
                                            (cffi:null-pointer) (cffi:null-pointer)
-                                           timeout)))
-                     (when (got-winch tui) ; TODO do we self-pipe?
-                       (handle-resize tui))
+                                           (or timeout (cffi:null-pointer)))))
                      (cond ((not (minusp ret))
                             (if (zerop ret) ; timeout
                                 (when next-timer
                                   (update-timeouts)
                                   (process-timer tui next-timer))
-                                (if (plusp (sys::fd-setp 0 fd-set))
-                                    (let ((event (sys:read-event)))
-                                      (reschedule-and-update-timers)
-                                      (dispatch-event tui event))
-                                    ;; must be an event on the pipe: wakeup
-                                    (progn
-                                      (sys::c-read (read-fd wakeup-pipe) buf 1)
-                                      (reschedule-and-update-timers)))))
+                                (progn
+                                  (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
+                                    (sys::c-read (sys::read-fd winch-pipe) buf 1)
+                                    (handle-resize tui))
+                                  (if (sys::fd-setp 0 fd-set)
+                                      (let ((event (sys:read-event)))
+                                        (reschedule-and-update-timers)
+                                        (dispatch-event tui event))
+                                      ;; must be an event on the pipe: wakeup
+                                      (progn
+                                        (sys::c-read (sys::read-fd wakeup-pipe) buf 1)
+                                        (reschedule-and-update-timers))))))
                            ((= sys::c-errno sys::c-eintr)
-                            (when (got-winch tui) ; TODO usually caught before this
-                              (handle-resize tui))
                             (reschedule-and-update-timers))
                            (t
                             (sys:error-syscall-error "select failed"))))))))

@@ -7,7 +7,7 @@
     ((set (:pointer (:struct c-fd-set))))
     "FD_ZERO((fd_set *)set);")
 
-  (defwrapper* ("FD_ISSET" fd-setp) :int
+  (defwrapper* ("FD_ISSET" fd-isset) :int
     ((fd :int)
      (set (:pointer (:struct c-fd-set))))
     "return FD_ISSET(fd, (fd_set *)set);")

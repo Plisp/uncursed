@@ -24,7 +24,7 @@
   (tui:enable-alternate-screen)
   (tui:set-cursor-shape :invisible))
 
-(defmethod tui:handle-resize ((tui paint-ui))
+(defmethod tui:handle-resize progn ((tui paint-ui))
   tui)
 
 (defun tui-handle-event (tui ev)
