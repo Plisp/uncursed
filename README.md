@@ -14,9 +14,9 @@ n.b. `sand-game.lisp` features the color/timer functionality of the library and 
 - [x] unicode support (combining and fullwidth)
 - [x] basic terminal resizing support
 - [x] timers
-- [ ] resizing
+- [x] resizing
   - [x] resize on input
-  - [ ] resize live
+  - [x] resize live
 - [x] cross-thread `wakeup`
 - [ ] better window management interface
 - [ ] documentation

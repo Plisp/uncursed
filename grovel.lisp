@@ -8,6 +8,11 @@
 (progn
   (include "errno.h")
   (cvar ("errno" c-errno) :int)
+  (constant (c-eintr "EINTR"))
+
+  (include "fcntl.h")
+  (constant (c-fsetfl "F_SETFL"))
+  (constant (c-ononblock "O_NONBLOCK"))
 
   (include "signal.h")
   (constant (c-sigwinch "SIGWINCH"))

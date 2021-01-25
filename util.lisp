@@ -111,7 +111,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
   (cffi:foreign-free old-termios)
   (values))
 
-;;; input parsing
+;;; input parsing TODO could be more robust to csi garbage
 
 (defun read-integer ()
   (let ((digit-list (loop :with acc
@@ -297,6 +297,9 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
               (nthcdr 4 event))))
 
 ;;; select TODO
+
+(defun set-nonblock (fd)
+  (cffi:foreign-funcall "fcntl" :int fd :int c-fsetfl :int c-ononblock :int))
 
 (cffi:defcfun ("close" c-close) :int
   (fd :int))

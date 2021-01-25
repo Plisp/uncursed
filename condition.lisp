@@ -8,5 +8,6 @@
 
 (defun error-syscall-error (control &rest args)
   (error 'syscall-error
-         :format-control control
+         :format-control #-sbcl control
+                         #+sbcl (format nil "~a: ~a" control (sb-int:strerror))
          :format-arguments args))

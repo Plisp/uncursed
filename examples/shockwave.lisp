@@ -115,6 +115,7 @@
 (defmethod tui:handle-key-event ((window view) tui event)
   nil)
 
+(defparameter *bonfire* nil)
 (defparameter *green-mod* 1.08)
 (defmethod tui:handle-mouse-event ((window view) tui button state line col &key)
   (case button
@@ -131,8 +132,6 @@
          (tui:stop tui))))
 
 ;;; tick logic
-
-(defparameter *bonfire* nil)
 
 (defparameter *tick* 0.05)
 
@@ -220,8 +219,8 @@
       (progn
         (bt:make-thread (lambda () (tui-main)))
         #+sbcl
-        (setf *log* (sb-concurrency:make-mailbox :name "log"))
-        (loop :for m = (sb-concurrency:receive-message *log*)
+        (loop :initially (setf *log* (sb-concurrency:make-mailbox :name "log"))
+              :for m = (sb-concurrency:receive-message *log*)
               :until (eq m :stop)
               :do (print m)
                   (force-output)))

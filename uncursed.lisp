@@ -35,7 +35,9 @@
    (%termios :initform nil
              :accessor %termios)
    (%got-winch :initform nil
-               :accessor got-winch)))
+               :accessor got-winch)
+   (%wakeup-pipe :initform nil
+                 :accessor %wakeup-pipe)))
 
 (defgeneric run (tui))
 (defgeneric stop (tui)
@@ -45,6 +47,20 @@ May only be called from within the dynamic-extent of a call to RUN."))
 (defgeneric redisplay (tui))
 (defgeneric handle-event (tui ev))
 (defgeneric handle-resize (tui))
+
+(defun read-fd (pipe)
+  (check-type pipe cffi:foreign-pointer)
+  (cffi:foreign-aref pipe '(:array :int 2) 0))
+
+(defun write-fd (pipe)
+  (check-type pipe cffi:foreign-pointer)
+  (cffi:foreign-aref pipe '(:array :int 2) 1))
+
+(defun wakeup (tui)
+  "Wakes up TUI in a thread-safe manner."
+  (cffi:with-foreign-object (buf :char)
+    (when (minusp (sys::c-write (write-fd (%wakeup-pipe tui)) buf 1))
+      (sys:error-syscall-error "write failed"))))
 
 ;; sigwinch handling - redrawn on next keypress.
 
@@ -72,11 +88,24 @@ May only be called from within the dynamic-extent of a call to RUN."))
             (cols tui) cols))
     (ti:set-terminal (uiop:getenv "TERM"))
     (setf (%termios tui) (sys:setup-terminal 0))
-    (unwind-protect
-         (call-next-method)
-      (when (%termios tui)
-        (sys:restore-terminal (%termios tui) 0)
-        (setf (%termios tui) nil)))))
+    (cffi:with-foreign-object (wakeup-pipe :int 2)
+      (if (minusp (sys::pipe wakeup-pipe)) ; TODO maybe abstract this? is it even worth it
+          (sys:error-syscall-error "pipe failed")
+          (setf (%wakeup-pipe tui) wakeup-pipe))
+      (when (minusp (sys::set-nonblock (read-fd wakeup-pipe)))
+        (sys:error-syscall-error "fcntl failed"))
+      (when (minusp (sys::set-nonblock (write-fd wakeup-pipe)))
+        (sys:error-syscall-error "fcntl failed"))
+      (unwind-protect
+           (call-next-method)
+        (alexandria:when-let (termios (%termios tui))
+          (sys:restore-terminal termios 0)
+          (setf (%termios tui) nil))
+        ;; note if ^ fails, this will not run. But in that case we're screwed anyways
+        (alexandria:when-let (pipe (%wakeup-pipe tui))
+          (sys::c-close (read-fd pipe))
+          (sys::c-close (write-fd pipe))
+          (setf (%wakeup-pipe tui) nil))))))
 
 (defclass cell ()
   ((%style :initarg :style
@@ -134,10 +163,7 @@ setf-ing the style copies over the new attributes into the existing cell-style."
    (%use-palette :initform nil
                  :initarg :use-palette
                  :accessor use-palette
-                 :type (member t nil :approximate))
-   (%wakeup-pipe :initform (cffi:null-pointer)
-                 :accessor wakeup-pipe
-                 :type cffi:foreign-pointer)))
+                 :type (member t nil :approximate))))
 
 (define-condition window-bounds-error (sys:uncursed-error)
   ((coordinate :initarg :coordinate
@@ -178,12 +204,6 @@ setf-ing the style copies over the new attributes into the existing cell-style."
 arguments :shift, :alt, :control and :meta."))
 (defgeneric handle-key-event (window tui event)
   (:documentation "Interface may change."))
-
-(defun wakeup (tui)
-  "Wakes up TUI in a thread-safe manner."
-  (cffi:with-foreign-object (buf :char)
-    (sys::c-write (cffi:foreign-aref (wakeup-pipe tui) '(:array :int 2) 1)
-                  buf 1)))
 
 (defvar *put-buffer*)
 (defvar *put-window*)
@@ -512,12 +532,31 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
 (defmethod unschedule-timer ((tui tui) timer)
   (setf (timers tui) (delete timer (timers tui))))
 
+(defun process-timer (tui timer)
+  (multiple-value-bind (next-interval new-context)
+      (funcall (timer-callback timer) tui (timer-context timer))
+    (when next-interval
+      (setf (timer-interval timer) next-interval)
+      (schedule-timer tui timer))
+    (when new-context
+      (setf (timer-context timer) new-context))))
+
+;;; run
+
+(defun write-seconds-to-timeval (timeout timeval)
+  (multiple-value-bind (seconds decimal)
+      (truncate timeout)
+    (let ((subseconds (truncate (* decimal 1000000)))) ; usecs
+      (setf (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-sec) seconds
+            (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-usec) subseconds))))
+
 (defmethod run ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen)
                    (timers timers)
                    (rows rows)
-                   (cols cols))
+                   (cols cols)
+                   (wakeup-pipe %wakeup-pipe))
       tui
     (setf canvas (make-array (list rows cols)))
     (setf screen (make-array (list rows cols)))
@@ -527,51 +566,59 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
     (sys:clear-screen)
     (enable-mouse)
     (sys:catch-sigwinch)
-    (cffi:with-foreign-object (wakeup-pipe :int 2)
-      (when (minusp (sys::pipe wakeup-pipe))
-        (sys:error-syscall-error "pipe failed"))
-      (setf (wakeup-pipe tui) wakeup-pipe)
+    (cffi:with-foreign-objects ((timeval '(:struct sys::c-timeval))
+                                (fd-set '(:struct sys::c-fd-set))
+                                (buf :char 1))
       (unwind-protect
            (catch 'tui-quit
-
              (loop
                (redisplay tui)
                (let* ((before-read (get-internal-real-time))
                       (next-timer (pop timers))
-                      (next-timeout (when next-timer (timer-interval next-timer)))
-                      (event (if next-timer
-                                 (sys:read-event-timeout next-timeout)
-                                 (sys:read-event))))
-                 (when (got-winch tui)
-                   (handle-resize tui))
-                 ;;
-                 (if event
-                     ;; serve the event to one window, or the TUI catchall
-                     (let ((now (get-internal-real-time)))
-                       (when next-timer
-                         (push next-timer timers))
-                       (map () (lambda (timer)
-                                 (setf (timer-interval timer)
-                                       (max (- (timer-interval timer)
-                                               (/ (- now before-read)
-                                                  internal-time-units-per-second))
-                                            0)))
-                            timers)
-                       (dispatch-event tui event))
-                     (progn
-                       (map () (lambda (timer)
-                                 (decf (timer-interval timer) next-timeout))
-                            timers)
-                       ;; process expired timer
-                       (multiple-value-bind (next-interval new-context)
-                           (funcall (timer-callback next-timer)
-                                    tui
-                                    (timer-context next-timer))
-                         (when next-interval
-                           (setf (timer-interval next-timer) next-interval)
-                           (schedule-timer tui next-timer))
-                         (when new-context
-                           (setf (timer-context next-timer) new-context))))))))
+                      timeout)
+                 (sys::fd-zero fd-set)
+                 (sys::fd-set 0 fd-set)
+                 (sys::fd-set (read-fd wakeup-pipe) fd-set)
+                 (labels ((update-timeouts ()
+                            (let ((now (get-internal-real-time)))
+                              (map () (lambda (timer)
+                                        (setf (timer-interval timer)
+                                              (max (- (timer-interval timer)
+                                                      (/ (- now before-read)
+                                                         internal-time-units-per-second))
+                                                   0)))
+                                   timers)))
+                          (reschedule-and-update-timers ()
+                            (when next-timer
+                              (push next-timer timers)
+                              (update-timeouts))))
+                   (when next-timer
+                     (write-seconds-to-timeval (timer-interval next-timer) timeval)
+                     (setf timeout timeval))
+                   (let ((ret (sys::select (1+ (read-fd wakeup-pipe)) fd-set
+                                           (cffi:null-pointer) (cffi:null-pointer)
+                                           timeout)))
+                     (when (got-winch tui) ; TODO do we self-pipe?
+                       (handle-resize tui))
+                     (cond ((not (minusp ret))
+                            (if (zerop ret) ; timeout
+                                (when next-timer
+                                  (update-timeouts)
+                                  (process-timer tui next-timer))
+                                (if (plusp (sys::fd-setp 0 fd-set))
+                                    (let ((event (sys:read-event)))
+                                      (reschedule-and-update-timers)
+                                      (dispatch-event tui event))
+                                    ;; must be an event on the pipe: wakeup
+                                    (progn
+                                      (sys::c-read (read-fd wakeup-pipe) buf 1)
+                                      (reschedule-and-update-timers)))))
+                           ((= sys::c-errno sys::c-eintr)
+                            (when (got-winch tui) ; TODO usually caught before this
+                              (handle-resize tui))
+                            (reschedule-and-update-timers))
+                           (t
+                            (sys:error-syscall-error "select failed"))))))))
         (when (eq (use-palette tui) t)
           (sys::reset-colors)) ; hope
         (disable-mouse)
@@ -579,8 +626,6 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
         (disable-alternate-screen)
         (loop :while (sys:read-event-timeout 0)) ; drain events
         (sys:reset-sigwinch)
-        (sys::c-close (cffi:foreign-aref (wakeup-pipe tui) '(:array :int 2) 0))
-        (sys::c-close (cffi:foreign-aref (wakeup-pipe tui) '(:array :int 2) 1))
         (finish-output)))))
 
 (defmethod stop ((tui tui))
