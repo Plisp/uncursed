@@ -99,14 +99,14 @@ Sets process locale from environment."
                                                 c-isig ; we'll handle keys ourselves
                                                 c-echo))) ; no input echoing
         (setf c-cflag (logandc2 c-lflag c-parenb)) ; no parity checking
-        (when (minusp (tcsetattr fd c-set-attributes-now new-termios))
+        (when (minusp (tcsetattr fd c-set-attributes-drain new-termios))
           (error-syscall-error "tcsetattr failed"))
         old-termios))))
 
 (defun restore-terminal (old-termios fd)
   "Restores the terminal device backing FD to its original state. ORIG-TERMIOS is a pointer
 to the original termios struct returned by a call to SETUP-TERM which is freed."
-  (when (minusp (tcsetattr fd c-set-attributes-now old-termios))
+  (when (minusp (tcsetattr fd c-set-attributes-flush old-termios))
     (error-syscall-error "tcsetattr failed"))
   (cffi:foreign-free old-termios)
   (values))

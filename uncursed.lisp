@@ -613,7 +613,6 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
         (disable-mouse)
         (set-cursor-shape :block)
         (disable-alternate-screen)
-        (loop :while (sys:read-event-timeout 0)) ; drain events
         (sys:reset-sigwinch)
         (finish-output)))))
 

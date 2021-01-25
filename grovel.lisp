@@ -25,7 +25,8 @@
            (c-ws-rows "ws_row" :type :unsigned-short)
            (c-ws-cols "ws_col" :type :unsigned-short))
   (constant (c-get-winsz "TIOCGWINSZ"))
-  (constant (c-set-attributes-now "TCSANOW"))
+  (constant (c-set-attributes-drain "TCSADRAIN"))
+  (constant (c-set-attributes-flush "TCSAFLUSH"))
 
   (include "sys/select.h") ; TODO conditionalize
   (cstruct c-fd-set "fd_set")
