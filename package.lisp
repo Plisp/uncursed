@@ -83,10 +83,12 @@
            ;; methods
            #:rows #:cols
            #:windows
+           #:initialize
            #:run
            #:stop
            #:handle-event
            #:redisplay
+           ;; fns
            #:wakeup
 
            #:window
@@ -112,6 +114,7 @@
            #:event-handler
            #:schedule-timer
            #:unschedule-timer
+           #:use-palette
 
            #:standard-window
            #:window-bounds-error

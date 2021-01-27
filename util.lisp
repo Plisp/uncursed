@@ -51,11 +51,13 @@ backing FD. Returns NIL on failure."
 
 ;; utilities
 
-(defun enable-mouse ()
-  (format *terminal-io* "~c[?1006h~c[?1003h" #\esc #\esc))
+(defun enable-mouse (&key hover)
+  (if hover
+      (format *terminal-io* "~c[?1006h~c[?1003h" #\esc #\esc)
+      (format *terminal-io* "~c[?1006h~c[?1002h" #\esc #\esc)))
 
 (defun disable-mouse ()
-  (format *terminal-io* "~c[?1006l~c[?1003l" #\esc #\esc))
+  (format *terminal-io* "~c[?1006l~c[?1002l~c[?1003l" #\esc #\esc #\esc))
 
 (defun enable-focus-tracking ()
   (format *terminal-io* "~c[?1004h" #\esc))

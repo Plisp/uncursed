@@ -28,10 +28,6 @@
           :accessor rows)
    (%cols :initarg :columns
           :accessor cols)
-   (%windows :initarg :windows
-             :initform (list)
-             :accessor windows
-             :documentation "Windows in drawing order.")
    (%termios :initform nil
              :accessor %termios)
    (%winch-pipe :initform nil
@@ -135,6 +131,10 @@ setf-ing the style copies over the new attributes into the existing cell-style."
             :accessor canvas
             :type buffer
             :documentation "The contents to be drawn to the screen")
+   (%windows :initarg :windows
+             :initform (list)
+             :accessor windows
+             :documentation "Windows in drawing order.")
    (%focused-window :initarg :focused-window
                     :accessor focused-window
                     :type window)
@@ -459,8 +459,7 @@ arguments :shift, :alt, :control and :meta."))
                 (setf current-style (cell-style cell))
                 (write-string (cell-string cell))
                 (setf last-pos pos
-                      last-width cell-width))
-          :finally (force-output))
+                      last-width cell-width)))
     ;; swap buffers
     (rotatef screen canvas)))
 
@@ -535,22 +534,30 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
             (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-usec)
             subseconds))))
 
-(defmethod run ((tui tui))
+(defmethod initialize :before ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen)
-                   (timers timers)
                    (rows rows)
-                   (cols cols)
-                   (wakeup-pipe %wakeup-pipe)
-                   (winch-pipe %winch-pipe))
+                   (cols cols))
       tui
     (setf canvas (make-array (list rows cols)))
     (setf screen (make-array (list rows cols)))
     (loop :for idx :below (array-total-size canvas)
           :do (setf (row-major-aref canvas idx) (make-instance 'cell)
-                    (row-major-aref screen idx) (make-instance 'cell)))
-    (sys:clear-screen)
-    (enable-mouse)
+                    (row-major-aref screen idx) (make-instance 'cell)))))
+
+(defmethod initialize ((tui tui))
+  (enable-alternate-screen)
+  (sys:clear-screen)
+  (enable-mouse :hover nil)
+  (set-cursor-shape :invisible))
+
+(defmethod run ((tui tui))
+  (with-accessors ((timers timers)
+                   (wakeup-pipe %wakeup-pipe)
+                   (winch-pipe %winch-pipe))
+      tui
+    (initialize tui)
     (sys:catch-sigwinch (sys::write-fd winch-pipe))
     (cffi:with-foreign-objects ((timeval '(:struct sys::c-timeval))
                                 (fd-set '(:struct sys::c-fd-set))
@@ -559,6 +566,7 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
            (catch 'tui-quit
              (loop
                (redisplay tui)
+               (force-output)
                (let* ((before-read (get-internal-real-time))
                       (next-timer (pop timers))
                       timeout)

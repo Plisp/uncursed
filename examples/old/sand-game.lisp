@@ -23,9 +23,8 @@
 (defclass game-ui (tui:tui)
   ())
 
-(defmethod tui:run :before ((tui game-ui))
-  (tui:enable-alternate-screen)
-  (tui:set-cursor-shape :invisible))
+(defmethod tui:initialize :after ((ui game-ui))
+  (tui:enable-mouse :hover t))
 
 (defmethod tui:handle-resize progn ((tui game-ui))
   (when (or (< (tui:cols tui) *tui-width*) (< (tui:rows tui) 30))
@@ -266,7 +265,7 @@
     (setf *hp* -1))
   ;; win
   (when (>= *score* 9999)
-    (ti:tputs ti:clear-screen)
+    (uncursed-sys:clear-screen)
     (uncursed-sys:set-cursor-position 10 10)
     (write-string "                    .-'''-.
                    '   _    \

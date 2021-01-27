@@ -93,10 +93,6 @@
 (defclass ui (tui:tui)
   ())
 
-(defmethod tui:run :before ((tui ui))
-  (tui:enable-alternate-screen)
-  (tui:set-cursor-shape :invisible))
-
 (defclass view (tui:standard-window)
   ((waves :initform (make-array 0 :adjustable t :fill-pointer t)
           :accessor waves

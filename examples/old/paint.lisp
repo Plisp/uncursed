@@ -20,10 +20,6 @@
    (draw-style :initform (tui:make-style :fg #xffffff :bg #x000000)
                :accessor draw-style)))
 
-(defmethod tui:run :before ((tui paint-ui))
-  (tui:enable-alternate-screen)
-  (tui:set-cursor-shape :invisible))
-
 (defmethod tui:handle-resize progn ((tui paint-ui))
   tui)
 
