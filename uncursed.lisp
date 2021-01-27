@@ -429,12 +429,11 @@ arguments :shift, :alt, :control and :meta."))
                       :do (setf (aref canvas line column) (make-instance 'cell)
                                 (aref screen line column) (make-instance 'cell)))))))
 
-(defmethod redisplay :around ((tui tui))
+(defmethod redisplay :before ((tui tui))
   ;; clear canvas of any junk from last time before drawing
   (loop :with canvas = (canvas tui)
         :for idx :below (array-total-size canvas)
-        :do (setf (row-major-aref canvas idx) (make-instance 'cell)))
-  (call-next-method))
+        :do (setf (row-major-aref canvas idx) (make-instance 'cell))))
 
 (defmethod redisplay ((tui tui))
   (with-accessors ((canvas canvas)

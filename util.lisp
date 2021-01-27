@@ -528,9 +528,10 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
         (setf (aref s (1- (length s))) #\m) ; last #\;->#\m
         (write-string s *terminal-io*)))))
 
+(define-constant +blank-style+ (make-style) :test 'equalp)
 (defun set-style (style &optional use-palette)
   (ti:tputs ti:exit-attribute-mode)
-  (set-style-from-old *default-style* style use-palette))
+  (set-style-from-old +blank-style+ style use-palette))
 
 (defun set-foreground (r g b)
   (format *terminal-io* "~c[38;2;~d;~d;~dm" #\esc r g b))
