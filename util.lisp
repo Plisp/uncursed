@@ -437,13 +437,18 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
 
 ;;; attributes
 
-(defstruct (style (:conc-name nil))
-  (fg nil :type (or null (integer #x000000 #xffffff)))
-  (bg nil :type (or null (integer #x000000 #xffffff)))
-  (boldp nil :type boolean)
-  (italicp nil :type boolean)
-  (reversep nil :type boolean)
-  (underlinep nil :type boolean))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defstruct (style (:conc-name nil))
+    (fg nil :type (or null (integer #x000000 #xffffff)))
+    (bg nil :type (or null (integer #x000000 #xffffff)))
+    (boldp nil :type boolean)
+    (italicp nil :type boolean)
+    (reversep nil :type boolean)
+    (underlinep nil :type boolean))
+
+  (defmethod make-load-form ((o style) &optional env)
+    (declare (ignore env))
+    (make-load-form-saving-slots o)))
 
 (defun style-difference (a b)
   (let ((fga (fg a))
