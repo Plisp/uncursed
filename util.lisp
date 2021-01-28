@@ -101,7 +101,7 @@ Sets process locale from environment."
                                                 c-isig ; we'll handle keys ourselves
                                                 c-echo))) ; no input echoing
         (setf c-cflag (logandc2 c-lflag c-parenb)) ; no parity checking
-        (when (minusp (tcsetattr fd c-set-attributes-drain new-termios))
+        (when (minusp (tcsetattr fd c-set-attributes-flush new-termios))
           (error-syscall-error "tcsetattr failed"))
         old-termios))))
 

@@ -604,9 +604,10 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                                     (sys::c-read (sys::read-fd winch-pipe) buf 8)
                                     (handle-resize tui))
                                   (if (sys::fd-setp 0 fd-set)
-                                      (let ((event (sys:read-event)))
-                                        (reschedule-and-update-timers)
-                                        (dispatch-event tui event))
+                                      (loop :while (listen)
+                                            :for event = (sys:read-event)
+                                            :do (reschedule-and-update-timers)
+                                                (dispatch-event tui event))
                                       ;; must be an event on the pipe: wakeup
                                       (progn
                                         (sys::c-read (sys::read-fd wakeup-pipe) buf 8)
