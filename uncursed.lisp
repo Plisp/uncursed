@@ -560,7 +560,7 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
     (sys:catch-sigwinch (sys::write-fd winch-pipe))
     (cffi:with-foreign-objects ((timeval '(:struct sys::c-timeval))
                                 (fd-set '(:struct sys::c-fd-set))
-                                (buf :char 1))
+                                (buf :char 8))
       (unwind-protect
            (catch 'tui-quit
              (loop
@@ -601,7 +601,7 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                                   (process-timer tui next-timer))
                                 (progn
                                   (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
-                                    (sys::c-read (sys::read-fd winch-pipe) buf 1)
+                                    (sys::c-read (sys::read-fd winch-pipe) buf 8)
                                     (handle-resize tui))
                                   (if (sys::fd-setp 0 fd-set)
                                       (let ((event (sys:read-event)))
@@ -609,7 +609,7 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                                         (dispatch-event tui event))
                                       ;; must be an event on the pipe: wakeup
                                       (progn
-                                        (sys::c-read (sys::read-fd wakeup-pipe) buf 1)
+                                        (sys::c-read (sys::read-fd wakeup-pipe) buf 8)
                                         (reschedule-and-update-timers))))))
                            ((= sys::c-errno sys::c-eintr)
                             (reschedule-and-update-timers))
