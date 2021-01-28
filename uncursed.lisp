@@ -35,7 +35,7 @@
    (%wakeup-pipe :initform nil
                  :accessor %wakeup-pipe)))
 
-(defgeneric run (tui))
+(defgeneric run (tui &key &allow-other-keys))
 (defgeneric stop (tui)
   (:documentation "Causes the terminal to be restored to its original state immediately.
 May only be called from within the dynamic-extent of a call to RUN."))
@@ -59,7 +59,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
 
 ;; our only responsibilities at this level
 
-(defmethod run :around ((tui tui-base))
+(defmethod run :around ((tui tui-base) &key)
   (let (#+(or sbcl cmu) (*terminal-io* *standard-output*))
     (destructuring-bind (rows . cols)
         (terminal-dimensions)
@@ -531,7 +531,8 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
       (setf (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-sec)
             seconds
             (cffi:foreign-slot-value timeval '(:struct sys::c-timeval) 'sys::c-tv-usec)
-            subseconds))))
+            subseconds)
+      timeval)))
 
 (defmethod initialize :before ((tui tui))
   (with-accessors ((canvas canvas)
@@ -551,7 +552,7 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
   (enable-mouse :hover nil)
   (set-cursor-shape :invisible))
 
-(defmethod run ((tui tui))
+(defmethod run ((tui tui) &key (redisplay-on-input t))
   (with-accessors ((timers timers)
                    (wakeup-pipe %wakeup-pipe)
                    (winch-pipe %winch-pipe))
@@ -564,58 +565,63 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
       (unwind-protect
            (catch 'tui-quit
              (loop
-               (redisplay tui)
-               (force-output)
-               (let* ((before-read (get-internal-real-time))
-                      (next-timer (pop timers))
-                      timeout)
-                 (sys::fd-zero fd-set)
-                 (sys::fd-set 0 fd-set)
-                 (sys::fd-set (sys::read-fd wakeup-pipe) fd-set)
-                 (sys::fd-set (sys::read-fd winch-pipe) fd-set)
-                 (labels ((update-timeouts ()
-                            (let ((now (get-internal-real-time)))
-                              (map () (lambda (timer)
-                                        (setf (timer-interval timer)
-                                              (max (- (timer-interval timer)
-                                                      (/ (- now before-read)
-                                                         internal-time-units-per-second))
-                                                   0)))
-                                   timers)))
-                          (reschedule-and-update-timers ()
-                            (when next-timer
-                              (push next-timer timers)
-                              (update-timeouts))))
-                   (when next-timer
-                     (write-seconds-to-timeval (timer-interval next-timer) timeval)
-                     (setf timeout timeval))
-                   (let ((ret (sys::select (1+ (max (sys::read-fd wakeup-pipe)
-                                                    (sys::read-fd winch-pipe)))
-                                           fd-set
-                                           (cffi:null-pointer) (cffi:null-pointer)
-                                           (or timeout (cffi:null-pointer)))))
-                     (cond ((not (minusp ret))
-                            (if (zerop ret) ; timeout
-                                (when next-timer
-                                  (update-timeouts)
-                                  (process-timer tui next-timer))
-                                (progn
-                                  (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
-                                    (sys::c-read (sys::read-fd winch-pipe) buf 8)
-                                    (handle-resize tui))
-                                  (if (sys::fd-setp 0 fd-set)
-                                      (loop :while (listen)
-                                            :for event = (sys:read-event)
-                                            :do (reschedule-and-update-timers)
-                                                (dispatch-event tui event))
-                                      ;; must be an event on the pipe: wakeup
-                                      (progn
-                                        (sys::c-read (sys::read-fd wakeup-pipe) buf 8)
-                                        (reschedule-and-update-timers))))))
-                           ((= sys::c-errno sys::c-eintr)
-                            (reschedule-and-update-timers))
-                           (t
-                            (sys:error-syscall-error "select failed"))))))))
+               :with got-stdin
+               :with last-time = (get-internal-real-time)
+               :for next-timer = (pop timers)
+               :for timeout = (and next-timer
+                                   (write-seconds-to-timeval (timer-interval next-timer)
+                                                             timeval))
+               :do (or (and (not redisplay-on-input) got-stdin)
+                       (progn (redisplay tui) (force-output)))
+                   ;; main loop
+                   (labels ((update-timeouts ()
+                              (let* ((now (get-internal-real-time))
+                                     (elapsed (/ (- now last-time)
+                                                 internal-time-units-per-second)))
+                                ;;(uncursed-shockwave::log* (float elapsed))
+                                (map () (lambda (timer)
+                                          (setf (timer-interval timer)
+                                                (max (- (timer-interval timer) elapsed)
+                                                     0)))
+                                     timers)
+                                (setf last-time now)))
+                            (reschedule-and-update-timers ()
+                              (when next-timer
+                                (push next-timer timers)
+                                (update-timeouts))))
+                     ;; setup select
+                     (sys::fd-zero fd-set)
+                     (sys::fd-set 0 fd-set)
+                     (sys::fd-set (sys::read-fd wakeup-pipe) fd-set)
+                     (sys::fd-set (sys::read-fd winch-pipe) fd-set)
+                     (let ((ret (sys::select (1+ (max (sys::read-fd wakeup-pipe)
+                                                      (sys::read-fd winch-pipe)))
+                                             fd-set
+                                             (cffi:null-pointer) (cffi:null-pointer)
+                                             (or timeout (cffi:null-pointer)))))
+                       (cond ((zerop ret) ; timeout
+                              (when next-timer
+                                (update-timeouts)
+                                (process-timer tui next-timer)))
+                             ((plusp ret)
+                              (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
+                                (sys::c-read (sys::read-fd winch-pipe) buf 8)
+                                (handle-resize tui))
+                              (if (sys::fd-setp 0 fd-set)
+                                  (loop :initially (setf got-stdin t)
+                                        :while (listen)
+                                        :for event = (sys:read-event)
+                                        :do (reschedule-and-update-timers)
+                                            (dispatch-event tui event))
+                                  ;; must be an event on the pipe: wakeup
+                                  (progn
+                                    (setf got-stdin nil)
+                                    (sys::c-read (sys::read-fd wakeup-pipe) buf 8)
+                                    (reschedule-and-update-timers))))
+                             ((= sys::c-errno sys::c-eintr)
+                              (reschedule-and-update-timers))
+                             (t
+                              (sys:error-syscall-error "select failed")))))))
         (when (eq (use-palette tui) t)
           (sys::reset-colors)) ; hope
         (disable-mouse)

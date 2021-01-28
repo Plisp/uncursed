@@ -177,7 +177,7 @@
                  waves)))
     ;; update wave positions
     (loop :with copy = (copy-seq waves)
-            :initially (setf (fill-pointer waves) 0)
+          :initially (setf (fill-pointer waves) 0)
           :for w :across copy
           :do (let ((old (wave-color w)))
                 (setf (wave-color w)
