@@ -60,7 +60,8 @@ May only be called from within the dynamic-extent of a call to RUN."))
 ;; our only responsibilities at this level
 
 (defmethod run :around ((tui tui-base) &key)
-  (let (#+(or sbcl cmu) (*terminal-io* *standard-output*))
+  (let ((sys:*character-widths* (make-hash-table))
+        #+(or sbcl cmu) (*terminal-io* *standard-output*))
     (destructuring-bind (rows . cols)
         (terminal-dimensions)
       (setf (rows tui) rows

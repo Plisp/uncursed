@@ -17,7 +17,8 @@
   )
 
 (defun character-width (character)
-  "Returns the displayed width of CHARACTER"
+  "Returns the displayed width of CHARACTER. It is recommended to bind *character-widths*
+dynamically in calling threads."
   (declare (optimize speed))
   (let* ((codepoint (char-code character))
          (result (gethash codepoint *character-widths*)))
@@ -28,7 +29,6 @@
                   -1)))))
 
 (defun display-width (string)
-  "Good enough"
   (reduce #'+ (map 'vector #'character-width string)))
 
 (defvar *fallback-terminal-dimensions* (cons 24 80))
