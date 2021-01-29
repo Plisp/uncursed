@@ -565,12 +565,14 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
       (unwind-protect
            (catch 'tui-quit
              (loop
-               :with got-stdin
                :with last-time = (get-internal-real-time)
+               :with nfds = (1+ (max (sys::read-fd wakeup-pipe) (sys::read-fd winch-pipe)))
+               :with got-stdin
+               ;;:with last-timeout = (get-internal-real-time)
                :for next-timer = (pop timers)
-               :for timeout = (and next-timer
-                                   (write-seconds-to-timeval (timer-interval next-timer)
-                                                             timeval))
+               :for timeout = (when next-timer
+                                (write-seconds-to-timeval (timer-interval next-timer)
+                                                          timeval))
                :do (or (and (not redisplay-on-input) got-stdin)
                        (progn (redisplay tui) (force-output)))
                    ;; main loop
@@ -578,7 +580,6 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                               (let* ((now (get-internal-real-time))
                                      (elapsed (/ (- now last-time)
                                                  internal-time-units-per-second)))
-                                ;;(uncursed-shockwave::log* (float elapsed))
                                 (map () (lambda (timer)
                                           (setf (timer-interval timer)
                                                 (max (- (timer-interval timer) elapsed)
@@ -594,14 +595,17 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                      (sys::fd-set 0 fd-set)
                      (sys::fd-set (sys::read-fd wakeup-pipe) fd-set)
                      (sys::fd-set (sys::read-fd winch-pipe) fd-set)
-                     (let ((ret (sys::select (1+ (max (sys::read-fd wakeup-pipe)
-                                                      (sys::read-fd winch-pipe)))
-                                             fd-set
+                     (let ((ret (sys::select nfds fd-set
                                              (cffi:null-pointer) (cffi:null-pointer)
                                              (or timeout (cffi:null-pointer)))))
                        (cond ((zerop ret) ; timeout
                               (when next-timer
-                                (update-timeouts)
+                                (update-timeouts) ; should go before process-timer v
+                                ;; ;; timer interval testing
+                                ;; (uncursed-shockwave::log*
+                                ;;  (float (/ (- (get-internal-real-time) last-timeout)
+                                ;;            1000)))
+                                ;; (setf last-timeout (get-internal-real-time))
                                 (process-timer tui next-timer)))
                              ((plusp ret)
                               (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
@@ -611,8 +615,8 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                                   (loop :initially (setf got-stdin t)
                                         :while (listen)
                                         :for event = (sys:read-event)
-                                        :do (reschedule-and-update-timers)
-                                            (dispatch-event tui event))
+                                        :do (dispatch-event tui event)
+                                        :finally (reschedule-and-update-timers))
                                   ;; must be an event on the pipe: wakeup
                                   (progn
                                     (setf got-stdin nil)
