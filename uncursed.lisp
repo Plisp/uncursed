@@ -553,6 +553,11 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
   (enable-mouse :hover nil)
   (set-cursor-shape :invisible))
 
+;; zulu's tips for windows:
+;; An event CreateEventW is what I would use to wake up another thread like that
+;; if you need a timer, with single thread, use SetWaitableTimerEx to create a timer
+;; that'll wake you up from WaitForMultipleObject without needing a separate thread
+
 (defmethod run ((tui tui) &key (redisplay-on-input t))
   (with-accessors ((timers timers)
                    (wakeup-pipe %wakeup-pipe)

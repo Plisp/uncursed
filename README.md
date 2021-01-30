@@ -18,5 +18,6 @@ n.b. `sand-game.lisp` features the color/timer functionality of the library and 
   - [x] resize on input
   - [x] resize live
 - [x] cross-thread `wakeup`
+- [ ] windows support
 - [ ] better window management interface
 - [ ] documentation
