@@ -53,6 +53,8 @@ May only be called from within the dynamic-extent of a call to RUN."))
       (sys:error-syscall-error "write failed"))))
 
 (defmethod handle-resize progn ((tui tui-base))
+  (sys:set-style *default-style* (use-palette tui))
+  (ti:tputs ti:clear-screen)
   (let ((dimensions (terminal-dimensions)))
     (setf (rows tui) (car dimensions)
           (cols tui) (cdr dimensions))))
