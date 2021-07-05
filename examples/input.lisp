@@ -14,7 +14,7 @@
         (unwind-protect
              (progn
                (setf termios (uncursed-sys:setup-terminal 0))
-               (let ((*terminal-io* *standard-output*))
+               (let (#+sbcl (*terminal-io* *standard-output*))
                  (uncursed:enable-mouse)
                  (force-output))
                (loop :for event = (print (uncursed-sys:read-event))
@@ -22,7 +22,7 @@
                      :do (princ #\return)
                          (force-output)))
           (princ #\return)
-          (let ((*terminal-io* *standard-output*))
+          (let (#+sbcl (*terminal-io* *standard-output*))
             (uncursed:disable-mouse)
             (force-output))
           (uncursed-sys:restore-terminal termios 0)))))))

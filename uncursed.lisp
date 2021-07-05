@@ -579,7 +579,6 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                :with last-time = (get-internal-real-time)
                :with nfds = (1+ (max (sys::read-fd wakeup-pipe) (sys::read-fd winch-pipe)))
                :with got-stdin
-               ;;:with last-timeout = (get-internal-real-time)
                :for next-timer = (pop timers)
                :for timeout = (when next-timer
                                 (write-seconds-to-timeval (timer-interval next-timer)
@@ -611,12 +610,7 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                                              (or timeout (cffi:null-pointer)))))
                        (cond ((zerop ret) ; timeout
                               (when next-timer
-                                (update-timeouts) ; should go before process-timer v
-                                ;; ;; timer interval testing
-                                ;; (uncursed-shockwave::log*
-                                ;;  (float (/ (- (get-internal-real-time) last-timeout)
-                                ;;            1000)))
-                                ;; (setf last-timeout (get-internal-real-time))
+                                (update-timeouts)
                                 (process-timer tui next-timer)))
                              ((plusp ret)
                               (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
