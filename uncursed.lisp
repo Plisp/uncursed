@@ -430,7 +430,10 @@ arguments :shift, :alt, :control and :meta."))
       (loop :for line :from old-lines :below rows
             :do (loop :for column :from 0 :below cols
                       :do (setf (aref canvas line column) (make-instance 'cell)
-                                (aref screen line column) (make-instance 'cell)))))))
+                                (aref screen line column) (make-instance 'cell))))
+      ;; garbled remains of screen were cleared by the tui-base method
+      (loop :for i :below (array-total-size screen)
+            :do (setf (cell-string (row-major-aref screen i)) "")))))
 
 (defmethod redisplay :before ((tui tui))
   ;; clear canvas of any junk from last time before drawing
