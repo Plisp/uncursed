@@ -1,9 +1,5 @@
 (in-package :uncursed-sys)
 
-(include "stdint.h")
-(ctype c-size "size_t")
-(constant (c-max-size "SIZE_MAX"))
-
 #+unix
 (progn
   (include "errno.h")
