@@ -6,6 +6,9 @@ A higher-level buffered abstraction and low-level utilities are available. Suppo
 Some basic examples can be found in the `examples` directory.
 n.b. `sand-game.lisp` features the color/timer functionality of the library and displays flashing colors.
 
+![demo](https://media.giphy.com/media/F0s3CHtvG8bopDwPDv/giphy.gif)
+
+## capabilities
 - [x] direct-color (truecolor) support
   - [x] palette fallback (init_color or approximation)
 - [x] comprehensive input handling
@@ -18,6 +21,6 @@ n.b. `sand-game.lisp` features the color/timer functionality of the library and 
   - [x] resize on input
   - [x] resize live
 - [x] cross-thread `wakeup`
-- [ ] windows support
+- [ ] Windows support
 - [ ] better window management interface
 - [ ] documentation
