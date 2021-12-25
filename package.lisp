@@ -86,7 +86,6 @@
            #:initialize
            #:run
            #:stop
-           #:handle-event
            #:redisplay
            ;; fns
            #:wakeup
@@ -134,6 +133,4 @@
            ;; restarts
            #:overwrite-char
            #:ignore-put
-
-           #:curved-box-border
            ))

@@ -41,7 +41,6 @@
 May only be called from within the dynamic-extent of a call to RUN."))
 
 (defgeneric redisplay (tui))
-(defgeneric handle-event (tui ev))
 (defgeneric handle-resize (tui)
   (:documentation "Called when SIGWINCH is caught (the terminal window is resized).")
   (:method-combination progn :most-specific-last))
@@ -54,7 +53,7 @@ May only be called from within the dynamic-extent of a call to RUN."))
 
 (defmethod handle-resize progn ((tui tui-base))
   (sys:set-style *default-style* (use-palette tui))
-  (ti:tputs ti:clear-screen)
+  (ti:tputs ti:clear-screen) ; terminals typically garble the screen irrecoverably
   (let ((dimensions (terminal-dimensions)))
     (setf (rows tui) (car dimensions)
           (cols tui) (cdr dimensions))))
@@ -558,7 +557,7 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
   (enable-mouse :hover nil)
   (set-cursor-shape :invisible))
 
-;; zulu's tips for windows:
+;; TODO zulu's tips for windows:
 ;; An event CreateEventW is what I would use to wake up another thread like that
 ;; if you need a timer, with single thread, use SetWaitableTimerEx to create a timer
 ;; that'll wake you up from WaitForMultipleObject without needing a separate thread
@@ -641,38 +640,3 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
 
 (defmethod stop ((tui tui))
   (throw 'tui-quit nil))
-
-;; (let ((horizontal-border-char #\─)
-;;       (vertical-border-char #\│)
-;;       (top-left-curved-border-char #\╭)
-;;       (top-right-curved-border-char #\╮)
-;;       (bottom-left-curved-border-char #\╰)
-;;       (bottom-right-curved-border-char #\╯))
-;;   (defun curved-box-border (window style)
-;;     (check-type window window)
-;;     (check-type style style)
-;;     (set-style style)
-;;     (let ((dimensions (dimensions window)))
-;;       ;; horizontal borders and corners
-;;       (let ((horizontal-border (make-string (- (rect-cols dimensions) 2)
-;;                                             :initial-element horizontal-border-char)))
-;;         (set-cursor-position (rect-y dimensions) (rect-x dimensions))
-;;         (write-char top-left-curved-border-char)
-;;         (write-string horizontal-border)
-;;         (write-char top-right-curved-border-char)
-;;         (set-cursor-position (+ (rect-y dimensions) (1- (rect-rows dimensions)))
-;;                              (rect-x dimensions))
-;;         (write-char bottom-left-curved-border-char)
-;;         (write-string horizontal-border)
-;;         (write-char bottom-right-curved-border-char))
-;;       ;; vertical borders
-;;       (loop :for line :from (1+ (rect-y dimensions))
-;;             :repeat (- (rect-rows dimensions) 2)
-;;             :do (set-cursor-position line (rect-x dimensions))
-;;                 (write-char vertical-border-char))
-;;       (loop :for line :from (1+ (rect-y dimensions))
-;;             :repeat (- (rect-rows dimensions) 2)
-;;             :do (set-cursor-position line
-;;                                      (+ (rect-x dimensions) (- (rect-cols dimensions) 2) 1))
-;;                 (write-char vertical-border-char)))
-;;     (format t "~c[39m" #\esc)))
