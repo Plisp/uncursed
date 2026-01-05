@@ -682,17 +682,26 @@ level cell grid."
 ;;; attributes
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
-  (defstruct (style (:conc-name nil))
-    (fg nil :type (or null (integer #x000000 #xffffff)))
-    (bg nil :type (or null (integer #x000000 #xffffff)))
-    (boldp nil :type boolean)
-    (italicp nil :type boolean)
-    (reversep nil :type boolean)
-    (underlinep nil :type boolean))
+  (defstruct (style (:conc-name nil)
+                    (:copier nil))
+    (fg nil :type (or null (integer #x000000 #xffffff)) :read-only t)
+    (bg nil :type (or null (integer #x000000 #xffffff)) :read-only t)
+    (boldp nil :type boolean :read-only t)
+    (italicp nil :type boolean :read-only t)
+    (reversep nil :type boolean :read-only t)
+    (underlinep nil :type boolean :read-only t))
 
   (defmethod make-load-form ((o style) &optional env)
     (declare (ignore env))
     (make-load-form-saving-slots o)))
+
+(defun copy-style (style &key fg bg boldp italicp reversep underlinep)
+  (make-style :fg (or fg (fg style))
+              :bg (or bg (bg style))
+              :boldp (or boldp (boldp style))
+              :italicp (or italicp (italicp style))
+              :reversep (or reversep (reversep style))
+              :underlinep (or underlinep (underlinep style))))
 
 (defun style-difference (a b)
   (let ((fga (fg a))

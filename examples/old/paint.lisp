@@ -20,9 +20,6 @@
    (draw-style :initform (tui:make-style :fg #xffffff :bg #x000000)
                :accessor draw-style)))
 
-(defmethod tui:handle-resize progn ((tui paint-ui))
-  tui)
-
 (defun tui-handle-event (tui ev)
   (cond ((equal ev '(#\w :control))
          (tui:stop tui))))
@@ -52,11 +49,13 @@
              (<= 1 x 2))
     (let* ((palette-index (1- y))
            (new-color (nth palette-index (colors window))))
-      (case button
-        (:left (setf (tui:fg (draw-style *paint-ui*)) new-color
-                     (palette-fg-index window) palette-index))
-        (:right (setf (tui:bg (draw-style *paint-ui*)) new-color
-                      (palette-bg-index window) palette-index))))))
+      (case button ; TODO create new, don't reuse
+        (:left
+         (setf (draw-style *paint-ui*) (tui:copy-style (draw-style *paint-ui*) :fg new-color)
+               (palette-fg-index window) palette-index))
+        (:right
+         (setf (draw-style *paint-ui*) (tui:copy-style (draw-style *paint-ui*) :bg new-color)
+               (palette-bg-index window) palette-index))))))
 
 (defclass layer-view (tui:standard-window)
   ((layers :initarg :layers
@@ -95,8 +94,8 @@
         (tui:put (draw-char *paint-ui*)
                  line col
                  (draw-style *paint-ui*)
-                 (first (layers window))
-                 window)))))
+                 window
+                 (first (layers window)))))))
 
 (defmethod tui:handle-key-event ((window layer-view) tui event)
   (when (and (characterp event) (graphic-char-p event))
@@ -147,7 +146,7 @@
                                     :event-handler #'tui-handle-event
                                     :use-palette use-palette)))
     (loop :for idx :below (array-total-size initial-layer)
-          :do (setf (row-major-aref initial-layer idx) (make-instance 'tui:cell)))
+          :do (setf (row-major-aref initial-layer idx) (tui:make-cell)))
     (tui:run *paint-ui*)))
 
 (defun main (&optional use-palette)

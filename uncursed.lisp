@@ -2,49 +2,58 @@
 
 ;;; basic definitions
 
-(defstruct (rect (:conc-name rect-))
-  (x (error "rect X not provided") :type fixnum)
-  (y (error "rect Y not provided") :type fixnum)
-  (rows (error "rect ROWS not provided") :type fixnum)
-  (cols (error "rect COLS not provided") :type fixnum))
+(defstruct (rect (:conc-name rect-)
+                 (:copier nil))
+  (x (error "rect X not provided") :type fixnum :read-only t)
+  (y (error "rect Y not provided") :type fixnum :read-only t)
+  (rows (error "rect ROWS not provided") :type fixnum :read-only t)
+  (cols (error "rect COLS not provided") :type fixnum :read-only t))
 
+(defun copy-rect (rect &key x y rows cols)
+  (make-rect :x (or x (rect-x rect))
+             :y (or y (rect-y rect))
+             :rows (or rows (rect-rows rect))
+             :cols (or cols (rect-cols rect))))
+
+(defstruct (cell (:conc-name cell-))
+  (style (copy-style *default-style*) :type style)
+  (string (string #\space) :type simple-string))
+
+(defmethod print-object ((cell cell) stream)
+  (format stream "#<cell string:~a>" (cell-string cell)))
+
+(defun cell/= (cell1 cell2)
+  (or (style-difference (cell-style cell1) (cell-style cell2))
+      (string/= (the simple-string (cell-string cell1))
+                (the simple-string (cell-string cell2)))))
+
+(defun wide-cell-p (cell)
+  (loop for c across (cell-string cell)
+        for width = 0 then (+ width (character-width c))
+        do (when (> width 1)
+             (return t))))
+
+(deftype buffer () '(array cell))
+
+;;; main API
+
+(defgeneric present (window))
 (defclass window ()
   ((%dimensions :initarg :dimensions
                 :initform (error "window dimensions not provided")
                 :accessor dimensions
-                :type rect)
-   (%focused-p :initform nil
-               :accessor focused-p))
+                :type rect))
   (:documentation "Pure data."))
 
 (defmethod print-object ((window window) stream)
   (print-unreadable-object (window stream)
-    (format stream "window: ~a focused: ~a" (dimensions window) (focused-p window))))
-
-(defgeneric present (window))
-
-(defclass tui-base ()
-  ((%rows :initarg :rows
-          :accessor rows)
-   (%cols :initarg :columns
-          :accessor cols)
-   (%termios :initform nil
-             :accessor %termios)
-   (%winch-pipe :initform nil
-                :accessor %winch-pipe)
-   (%wakeup-pipe :initform nil
-                 :accessor %wakeup-pipe)))
+    (format stream "<window: ~a>" (dimensions window))))
 
 (defgeneric run (tui &key &allow-other-keys))
 (defgeneric stop (tui)
   (:documentation "Causes the terminal to be restored to its original state immediately.
 May only be called from within the dynamic-extent of a call to RUN."))
-
 (defgeneric redisplay (tui))
-(defgeneric handle-resize (tui)
-  (:documentation "Called when SIGWINCH is caught (the terminal window is resized).")
-  (:method-combination progn :most-specific-last))
-
 
 (defun wakeup (tui)
   "Wakes up TUI in a thread-safe manner."
@@ -56,94 +65,13 @@ May only be called from within the dynamic-extent of a call to RUN."))
   (or (sys::SetEvent (%wakeup-pipe tui))
       (sys:error-syscall-error "setevent")))
 
-(defmethod handle-resize progn ((tui tui-base))
-  (sys:set-style *default-style* (use-palette tui))
-  (sys:clear-screen) ; terminals typically garble the screen irrecoverably
-  (let ((dimensions (terminal-dimensions)))
-    (setf (rows tui) (car dimensions)
-          (cols tui) (cdr dimensions))))
-
-;; our only responsibilities at this level
-
-(defmethod run :around ((tui tui-base) &key)
-  (let ((sys:*character-widths* (make-hash-table))
-        #+(or sbcl cmu) (*terminal-io* *standard-output*))
-    (destructuring-bind (rows . cols)
-        (terminal-dimensions)
-      (setf (rows tui) rows
-            (cols tui) cols))
-    #+unix
-    (progn
-      (ti:set-terminal (uiop:getenv "TERM"))
-      (setf (%termios tui) (sys:setup-terminal sys:+stdin+))
-
-      (cffi:with-foreign-objects ((wakeup-pipe :int 2)
-                                  (winch-pipe :int 2))
-        (sys::non-blocking-pipe winch-pipe)
-        (setf (%winch-pipe tui) winch-pipe)
-        (sys::non-blocking-pipe wakeup-pipe)
-        (setf (%wakeup-pipe tui) wakeup-pipe)
-        (unwind-protect
-             (call-next-method)
-          (alexandria:when-let (termios (%termios tui))
-            (sys:restore-terminal termios sys:+stdin+)
-            (setf (%termios tui) nil))
-		  (finish-output)
-          ;; note if ^ fails, this will not run. But in that case we're screwed anyways
-          (alexandria:when-let (pipe (%winch-pipe tui))
-            (sys::pipe-cleanup pipe)
-            (setf (%winch-pipe tui) nil))
-          (alexandria:when-let (pipe (%wakeup-pipe tui))
-            (sys::pipe-cleanup pipe)
-            (setf (%wakeup-pipe tui) nil)))))
-    #+windows
-    (progn
-      (setf (%termios tui) (sys:setup-terminal))
-      (setf (%wakeup-pipe tui) (sys::create-event))
-      (unwind-protect
-           (call-next-method)
-        (sys:restore-terminal (%termios tui))
-        (sys::CloseHandle (%wakeup-pipe tui))
-        (setf (%wakeup-pipe tui) nil)))))
-
-(defclass cell ()
-  ((%style :initarg :style
-           :initform (copy-style *default-style*)
-           :reader cell-style
-           :type style)
-   (%string :initarg :string
-            :initform (string #\space)
-            :accessor cell-string
-            :type simple-string
-            :documentation "Represents a grapheme cluster and its display style. Note that
-setf-ing the style copies over the new attributes into the existing cell-style.")))
-
-(defmethod (setf cell-style) (new-value (cell cell))
-  (let ((style (cell-style cell)))
-    (setf (fg style) (fg new-value)
-          (bg style) (bg new-value)
-          (boldp style) (boldp new-value)
-          (italicp style) (italicp new-value)
-          (reversep style) (reversep new-value)
-          (underlinep style) (underlinep new-value))))
-
-(defmethod print-object ((cell cell) stream)
-  (format stream "#<cell string:~a>" (cell-string cell)))
-
-(defun cell/= (cell1 cell2)
-  (or (style-difference (cell-style cell1) (cell-style cell2))
-      (string/= (the simple-string (cell-string cell1))
-                (the simple-string (cell-string cell2)))))
-
-(defun wide-cell-p (cell)
-  (> (display-width (cell-string cell)) 1))
-
-(deftype buffer () '(array cell))
-
-;;; main API
-
-(defclass tui (tui-base)
-  ((%screen :initarg :screen
+(defclass tui ()
+  ((%rows :initarg :rows :accessor rows)
+   (%cols :initarg :columns :accessor cols)
+   (%termios :initform nil :accessor %termios)
+   (%wakeup-pipe :initform nil :accessor %wakeup-pipe)
+   #+unix (%winch-pipe :initform nil :accessor %winch-pipe)
+   (%screen :initarg :screen
             :accessor screen
             :type buffer
             :documentation "The contents of the screen")
@@ -214,7 +142,7 @@ arguments :shift, :alt, :control and :meta."))
 ;; note that triple-width is rare enough (e.g. three-em-dash) and terminal support is
 ;; so lacking that there's no point supporting it
 (defun put (char line col &optional style
-                            (put-buffer *put-buffer*) (put-window *put-window*))
+                            (put-window *put-window*) (put-buffer *put-buffer*))
   (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
   #-sbcl (check-type put-buffer buffer)
   (check-type put-window window)
@@ -282,13 +210,11 @@ arguments :shift, :alt, :control and :meta."))
     width))
 
 (defun puts (string line col &optional style
-                               (put-buffer *put-buffer*) (put-window *put-window*))
-  (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
-  (check-type put-buffer buffer)
-  (check-type put-window window)
+                               (window *put-window*) (put-buffer *put-buffer*))
+  (check-type window window)
   (check-type string string)
   (check-type style (or style null))
-  (let ((dimensions (dimensions put-window))
+  (let ((dimensions (dimensions window))
         (string-display-width (display-width string))
         (last-non-combining-char-pos (position-if-not #'zerop string
                                                       :key #'character-width
@@ -297,17 +223,17 @@ arguments :shift, :alt, :control and :meta."))
         (error 'window-bounds-error
                :coordinate line
                :bounds :line
-               :window put-window))
+               :window window))
     (or (plusp col)
         (error 'window-bounds-error
                :coordinate col
                :bounds :column
-               :window put-window))
+               :window window))
     (or (<= (+ (1- col) string-display-width) (rect-cols dimensions))
         (error 'window-bounds-error
                :coordinate (+ (1- col) string-display-width)
                :bounds :column
-               :window put-window))
+               :window window))
     (if last-non-combining-char-pos
         (let* ((last-non-combining-char (char string last-non-combining-char-pos))
                (last-non-combining-char-visual-offset
@@ -340,7 +266,7 @@ arguments :shift, :alt, :control and :meta."))
           (or (put last-non-combining-char
                    line (+ col last-non-combining-char-visual-offset)
                    style
-                   put-buffer put-window)
+                   window put-buffer)
               ;; if IGNORE-PUT restart selected, abort here, before anything is written
               (return-from puts))
           ;; write first character after we've ascertained that the caller doesn't want to
@@ -366,45 +292,43 @@ arguments :shift, :alt, :control and :meta."))
                                      (lambda (e)
                                        (declare (ignore e))
                                        (invoke-restart 'overwrite-char))))
-                      (put char line put-col style put-buffer put-window)))
+                      (put char line put-col style window)))
           ;; write trailing combining characters
           (loop :for i :from (1+ last-non-combining-char-pos) :below (length string)
                 :do (put (char string i)
                          line (+ col last-non-combining-char-visual-offset)
                          style
-                         put-buffer put-window)))
+                         window)))
         ;; all combining characters, all fit at the index
         (loop :for char :across string
-              :do (put char line col style put-buffer put-window)))
+              :do (put char line col style window)))
     string-display-width))
 
-(defun put-style (style rect &optional (put-buffer *put-buffer*) (put-window *put-window*))
-  (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
-  (check-type put-buffer buffer)
-  (check-type put-window window)
+(defun put-style (style rect &optional (window *put-window*) (put-buffer *put-buffer*))
+  (check-type window window)
   (check-type rect rect)
   (check-type style style)
-  (let ((dimensions (dimensions put-window)))
+  (let ((dimensions (dimensions window)))
     (or (<= 0 (rect-y rect))
         (error 'window-bounds-error
                :coordinate (rect-y rect)
                :bounds :line
-               :window put-window))
+               :window window))
     (or (<= (+ (rect-y rect) (rect-rows rect)) (rect-rows dimensions))
         (error 'window-bounds-error
                :coordinate (+ (rect-y rect) (rect-rows rect))
                :bounds :line
-               :window put-window))
+               :window window))
     (or (<= 0 (rect-x rect))
         (error 'window-bounds-error
                :coordinate (rect-x rect)
                :bounds :column
-               :window put-window))
+               :window window))
     (or (<= (+ (rect-x rect) (rect-cols rect)) (rect-cols dimensions))
         (error 'window-bounds-error
                :coordinate (+ (rect-x rect) (rect-cols rect))
                :bounds :column
-               :window put-window))
+               :window window))
     (loop :repeat (rect-rows rect)
           :for y :from (+ (rect-y dimensions) (rect-y rect))
           :do (loop :repeat (rect-cols rect)
@@ -428,7 +352,13 @@ arguments :shift, :alt, :control and :meta."))
   (let ((*put-window* window))
     (call-next-method)))
 
-(defmethod handle-resize progn ((tui tui))
+(defun handle-resize (tui)
+  (sys:set-style *default-style* (use-palette tui))
+  (sys:clear-screen) ; terminals typically garble the screen irrecoverably
+  (let ((dimensions (terminal-dimensions)))
+    (setf (rows tui) (car dimensions)
+          (cols tui) (cdr dimensions)))
+  ;; fix internal structures
   (with-accessors ((canvas canvas)
                    (screen screen)
                    (rows rows)
@@ -441,28 +371,26 @@ arguments :shift, :alt, :control and :meta."))
       ;; fill empty cols in existing rows
       (loop :for line :below rows
             :do (loop :for column :from old-columns :below cols
-                      :do (setf (aref canvas line column) (make-instance 'cell)
-                                (aref screen line column) (make-instance 'cell))))
+                      :do (setf (aref canvas line column) (make-cell)
+                                (aref screen line column) (make-cell))))
       ;; fill new rows
       (loop :for line :from old-lines :below rows
             :do (loop :for column :below cols
-                      :do (setf (aref canvas line column) (make-instance 'cell)
-                                (aref screen line column) (make-instance 'cell))))
-      ;; garbled remains of screen were cleared by the tui-base method
+                      :do (setf (aref canvas line column) (make-cell)
+                                (aref screen line column) (make-cell))))
+      ;; screen should be clear
       (loop :for i :below (array-total-size screen)
             :do (setf (cell-string (row-major-aref screen i)) "")))))
 
-(defmethod redisplay :before ((tui tui))
-  ;; clear canvas of any junk from last time before drawing
+(defmethod redisplay ((tui tui))
   (loop :with canvas = (canvas tui)
         :for idx :below (array-total-size canvas)
-        :do (setf (row-major-aref canvas idx) (make-instance 'cell))))
-
-(defmethod redisplay ((tui tui))
+        :do (setf (row-major-aref canvas idx) (make-cell)))
+  ;;
   (with-accessors ((canvas canvas)
                    (screen screen))
       tui
-    ;; present windows
+    ;; we do not want windows to have a stable reference/access to the buffer
     (let ((*put-buffer* canvas))
       (map nil #'present (windows tui)))
     ;; render diff to terminal
@@ -564,23 +492,77 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
             subseconds)
       timeval)))
 
-(defmethod initialize :before ((tui tui))
-  (with-accessors ((canvas canvas)
-                   (screen screen)
-                   (rows rows)
-                   (cols cols))
-      tui
-    (setf canvas (make-array (list rows cols)))
-    (setf screen (make-array (list rows cols)))
-    (loop :for idx :below (array-total-size canvas)
-          :do (setf (row-major-aref canvas idx) (make-instance 'cell)
-                    (row-major-aref screen idx) (make-instance 'cell)))))
+(defmethod run :around ((tui tui) &key (mouse t) (use-altscreen t) (cursor-shape :invisible))
+  (let ((sys:*character-widths* (make-hash-table))
+        #+(or sbcl cmu) (*terminal-io* *standard-output*))
+    (destructuring-bind (rows . cols)
+        (terminal-dimensions)
+      (setf (rows tui) rows
+            (cols tui) cols))
+    ;; fill canvas
+    (with-accessors ((canvas canvas)
+                     (screen screen)
+                     (rows rows)
+                     (cols cols))
+        tui
+      (setf canvas (make-array (list rows cols)))
+      (setf screen (make-array (list rows cols)))
+      (loop :for idx :below (array-total-size canvas)
+            :do (setf (row-major-aref canvas idx) (make-cell)
+                      (row-major-aref screen idx) (make-cell))))
+    #+unix (progn
+             (ti:set-terminal (uiop:getenv "TERM"))
+             (setf (%termios tui) (sys:setup-terminal sys:+stdin+)))
+    #+windows (setf (%termios tui) (sys:setup-terminal))
 
-(defmethod initialize ((tui tui))
-  (enable-alternate-screen)
-  (sys:clear-screen)
-  (enable-mouse :hover nil)
-  (set-cursor-shape :invisible))
+    ;; initialization codes after terminal setup
+    (when use-altscreen
+      (enable-alternate-screen)
+      (sys:clear-screen))
+    (set-cursor-shape cursor-shape)
+    (when (eq mouse t) (enable-mouse :hover nil))
+    (when (eq mouse :hover) (enable-mouse :hover t))
+
+    ;; setup io
+    #+unix
+    (progn
+      (cffi:with-foreign-objects ((wakeup-pipe :int 2)
+                                  (winch-pipe :int 2))
+        (sys::non-blocking-pipe winch-pipe)
+        (setf (%winch-pipe tui) winch-pipe)
+        (sys::non-blocking-pipe wakeup-pipe)
+        (setf (%wakeup-pipe tui) wakeup-pipe)
+        (unwind-protect
+             (call-next-method)
+          (when (eq (use-palette tui) t)
+            (sys::reset-colors)) ; hope
+          (disable-mouse)
+          (disable-alternate-screen)
+          (set-cursor-shape :block)
+          ;;
+          (alexandria:when-let (termios (%termios tui))
+            (sys:restore-terminal termios sys:+stdin+)
+            (setf (%termios tui) nil))
+          ;; note if ^ fails, this will not run. But in that case we're screwed anyways
+          (alexandria:when-let (pipe (%winch-pipe tui))
+            (sys::pipe-cleanup pipe)
+            (setf (%winch-pipe tui) nil))
+          (alexandria:when-let (pipe (%wakeup-pipe tui))
+            (sys::pipe-cleanup pipe)
+            (setf (%wakeup-pipe tui) nil))
+          (sys:reset-sigwinch))))
+    #+windows
+    (progn
+      (setf (%wakeup-pipe tui) (sys::create-event))
+      (unwind-protect
+           (call-next-method)
+        (disable-mouse)
+        (disable-alternate-screen)
+        (set-cursor-shape :bar)
+        (sys:restore-terminal (%termios tui))
+        (sys::CloseHandle (%wakeup-pipe tui))
+        (setf (%wakeup-pipe tui) nil)))
+    (finish-output)))
 
 #+unix
 (defmethod run ((tui tui) &key (redisplay-on-input t))
@@ -588,146 +570,131 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
                    (wakeup-pipe %wakeup-pipe)
                    (winch-pipe %winch-pipe))
       tui
-    (initialize tui)
     (sys:catch-sigwinch (sys::write-fd winch-pipe))
     (cffi:with-foreign-objects ((timeval '(:struct sys::c-timeval))
                                 (fd-set '(:struct sys::c-fd-set))
                                 (buf :char 8))
-      (unwind-protect
-           (catch 'tui-quit
-             (loop
-               :with last-time = (get-internal-real-time)
-               :with nfds = (1+ (max (sys::read-fd wakeup-pipe) (sys::read-fd winch-pipe)))
-               :with got-stdin
-               :for next-timer = (pop timers)
-               :for timeout = (when next-timer
-                                (write-seconds-to-timeval (timer-interval next-timer)
-                                                          timeval))
-               :do (when (or redisplay-on-input (not got-stdin))
-                     (redisplay tui)
-                     (force-output))
-                   ;; main loop
-                   (labels ((update-timeouts ()
-                              (let* ((now (get-internal-real-time))
-                                     (elapsed (/ (- now last-time)
-                                                 internal-time-units-per-second)))
-                                (map nil (lambda (timer)
-                                           (setf (timer-interval timer)
-                                                 (max (- (timer-interval timer) elapsed)
-                                                      0)))
-                                     timers)
-                                (setf last-time now)))
-                            (reschedule-and-update-timers ()
-                              (when next-timer
-                                (push next-timer timers)
-                                (update-timeouts))))
-                     ;; setup select
-                     (sys::fd-zero fd-set)
-                     (sys::fd-set sys:+stdin+ fd-set)
-                     (sys::fd-set (sys::read-fd wakeup-pipe) fd-set)
-                     (sys::fd-set (sys::read-fd winch-pipe) fd-set)
-                     (let ((ret (sys::select nfds fd-set
-                                             (cffi:null-pointer) (cffi:null-pointer)
-                                             (or timeout (cffi:null-pointer)))))
-                       (cond ((zerop ret) ; timeout
-                              (setf got-stdin nil)
-                              (when next-timer
-                                (update-timeouts)
-                                (process-timer tui next-timer)))
-                             ((plusp ret)
-                              (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
-                                (sys::c-read (sys::read-fd winch-pipe) buf 8)
-                                (handle-resize tui))
-                              (if (sys::fd-setp sys:+stdin+ fd-set)
-                                  (loop :initially (setf got-stdin t)
-                                        :while (listen)
-                                        :for event = (sys:read-event)
-                                        :do (dispatch-event tui event)
-                                        :finally (reschedule-and-update-timers))
-                                  ;; must be an event on the pipe: wakeup
-                                  (progn
-                                    (setf got-stdin nil)
-                                    (sys::c-read (sys::read-fd wakeup-pipe) buf 8)
-                                    (reschedule-and-update-timers))))
-                             ((= sys::c-errno sys::c-eintr)
-                              (reschedule-and-update-timers))
-                             (t
-                              (sys:error-syscall-error "select failed")))))))
-        (when (eq (use-palette tui) t)
-          (sys::reset-colors)) ; hope
-        (disable-mouse)
-        (set-cursor-shape :block)
-        (disable-alternate-screen)
-        (sys:reset-sigwinch)
-        (force-output)))))
+      (catch 'tui-quit
+        (loop
+          :with last-time = (get-internal-real-time)
+          :with nfds = (1+ (max (sys::read-fd wakeup-pipe) (sys::read-fd winch-pipe)))
+          :with got-stdin
+          :for next-timer = (pop timers)
+          :for timeout = (when next-timer
+                           (write-seconds-to-timeval (timer-interval next-timer)
+                                                     timeval))
+          :do (when (or redisplay-on-input (not got-stdin))
+                (redisplay tui)
+                (force-output))
+              ;; main loop
+              (labels ((update-timeouts ()
+                         (let* ((now (get-internal-real-time))
+                                (elapsed (/ (- now last-time)
+                                            internal-time-units-per-second)))
+                           (map nil (lambda (timer)
+                                      (setf (timer-interval timer)
+                                            (max (- (timer-interval timer) elapsed)
+                                                 0)))
+                                timers)
+                           (setf last-time now)))
+                       (reschedule-and-update-timers ()
+                         (when next-timer
+                           (push next-timer timers)
+                           (update-timeouts))))
+                ;; setup select
+                (sys::fd-zero fd-set)
+                (sys::fd-set sys:+stdin+ fd-set)
+                (sys::fd-set (sys::read-fd wakeup-pipe) fd-set)
+                (sys::fd-set (sys::read-fd winch-pipe) fd-set)
+                (let ((ret (sys::select nfds fd-set
+                                        (cffi:null-pointer) (cffi:null-pointer)
+                                        (or timeout (cffi:null-pointer)))))
+                  (cond ((zerop ret) ; timeout
+                         (setf got-stdin nil)
+                         (when next-timer
+                           (update-timeouts)
+                           (process-timer tui next-timer)))
+                        ((plusp ret)
+                         (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
+                           (sys::c-read (sys::read-fd winch-pipe) buf 8)
+                           (handle-resize tui))
+                         (if (sys::fd-setp sys:+stdin+ fd-set)
+                             (loop :initially (setf got-stdin t)
+                                   :while (listen)
+                                   :for event = (sys:read-event)
+                                   :do (dispatch-event tui event)
+                                   :finally (reschedule-and-update-timers))
+                             ;; must be an event on the pipe: wakeup
+                             (progn
+                               (setf got-stdin nil)
+                               (sys::c-read (sys::read-fd wakeup-pipe) buf 8)
+                               (reschedule-and-update-timers))))
+                        ((= sys::c-errno sys::c-eintr)
+                         (reschedule-and-update-timers))
+                        (t
+                         (sys:error-syscall-error "select failed"))))))))))
 
 #+windows
 (defmethod run ((tui tui) &key (redisplay-on-input t))
-  (initialize tui)
   (with-accessors ((timers timers))
       tui
     (cffi:with-foreign-object (handles 'sys::handle 2)
       ;; WaitForMultipleObjects prefers the first, but doesn't matter too much here
       (setf (cffi:mem-ref handles 'sys::Handle) (first (%termios tui))
             (cffi:mem-aref handles 'sys::Handle 1) (%wakeup-pipe tui))
-      (unwind-protect
-           (catch 'tui-quit
-             (loop
-               :with last-time = (get-internal-real-time)
-               :with got-stdin
-               :for next-timer = (pop timers)
-               :for timeout = (when next-timer
-                                (truncate (* 1000 (timer-interval next-timer))))
-               :do (when (or redisplay-on-input (not got-stdin))
-                     (redisplay tui)
-                     (force-output))
-                   (labels ((update-timeouts ()
-                              (let* ((now (get-internal-real-time))
-                                     (elapsed (/ (- now last-time)
-                                                 internal-time-units-per-second)))
-                                (map nil (lambda (timer)
-                                           (setf (timer-interval timer)
-                                                 (max (- (timer-interval timer) elapsed)
-                                                      0)))
-                                     timers)
-                                (setf last-time now)))
-                            (reschedule-and-update-timers ()
-                              (when next-timer
-                                (push next-timer timers)
-                                (update-timeouts))))
-                     ;; DWORD WaitForMultipleObjects(DWORD len, HANDLE *handles,
-                     ;;                              BOOL waitAll, DWORD timeout_ms)
-                     ;; WaitForMultipleObjects is level triggered
-                     ;; XXX (listen) probably uses stdio and doesn't work with buffering
-                     (let ((ret (sys::WaitForMultipleObjects 2 handles 0 timeout)))
-                       (cond
-                         ((= ret 0) ; read key, mouse *and resize* events
-                          (setf got-stdin t)
-                          (loop
-                            :initially (when (car (sys:win-events-left (first (%termios tui))))
-                                         (handle-resize tui))
-                            :while (plusp (cdr (sys:win-events-left (first (%termios tui)))))
-                            :for event = (sys:read-event)
-                            :do (dispatch-event tui event)
-                            :finally (reschedule-and-update-timers)
-                                     ;; flush stale resize/other events as they make the wait
-                                     ;; return immediately. We have treated all input
-                                     (sys::FlushConsoleInputBuffer (first (%termios tui)))))
-                         ((= ret 1) ; wakeup
-                          (setf got-stdin nil)
-                          (reschedule-and-update-timers))
-                         ((= ret sys::+wait-timeout+)
-                          (setf got-stdin nil)
-                          (when next-timer
-                            (update-timeouts)
-                            (process-timer tui next-timer)))
-                         ((= ret sys::+wait-failed+)
-                          (sys:error-syscall-error "waitformultipleobjects"))
-                         (t (error "strange error: wait returned ~d" ret)))))))
-        (disable-mouse)
-        (set-cursor-shape :bar)
-        (disable-alternate-screen)
-        (finish-output)))))
+      (catch 'tui-quit
+        (loop
+          :with last-time = (get-internal-real-time)
+          :with got-stdin
+          :for next-timer = (pop timers)
+          :for timeout = (when next-timer
+                           (truncate (* 1000 (timer-interval next-timer))))
+          :do (when (or redisplay-on-input (not got-stdin))
+                (redisplay tui)
+                (force-output))
+              (labels ((update-timeouts ()
+                         (let* ((now (get-internal-real-time))
+                                (elapsed (/ (- now last-time)
+                                            internal-time-units-per-second)))
+                           (map nil (lambda (timer)
+                                      (setf (timer-interval timer)
+                                            (max (- (timer-interval timer) elapsed)
+                                                 0)))
+                                timers)
+                           (setf last-time now)))
+                       (reschedule-and-update-timers ()
+                         (when next-timer
+                           (push next-timer timers)
+                           (update-timeouts))))
+                ;; DWORD WaitForMultipleObjects(DWORD len, HANDLE *handles,
+                ;;                              BOOL waitAll, DWORD timeout_ms)
+                ;; WaitForMultipleObjects is level triggered
+                ;; XXX (listen) probably uses stdio and doesn't work with buffering
+                (let ((ret (sys::WaitForMultipleObjects 2 handles 0 timeout)))
+                  (cond
+                    ((= ret 0) ; read key, mouse *and resize* events
+                     (setf got-stdin t)
+                     (loop
+                       :initially (when (car (sys:win-events-left (first (%termios tui))))
+                                    (handle-resize tui))
+                       :while (plusp (cdr (sys:win-events-left (first (%termios tui)))))
+                       :for event = (sys:read-event)
+                       :do (dispatch-event tui event)
+                       :finally (reschedule-and-update-timers)
+                                ;; flush stale resize/other events as they make the wait
+                                ;; return immediately. We have treated all input
+                                (sys::FlushConsoleInputBuffer (first (%termios tui)))))
+                    ((= ret 1) ; wakeup
+                     (setf got-stdin nil)
+                     (reschedule-and-update-timers))
+                    ((= ret sys::+wait-timeout+)
+                     (setf got-stdin nil)
+                     (when next-timer
+                       (update-timeouts)
+                       (process-timer tui next-timer)))
+                    ((= ret sys::+wait-failed+)
+                     (sys:error-syscall-error "waitformultipleobjects"))
+                    (t (error "strange error: wait returned ~d" ret))))))))))
 
 (defmethod stop ((tui tui))
   (throw 'tui-quit nil))

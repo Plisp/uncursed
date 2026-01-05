@@ -102,13 +102,10 @@
           :type (vector wave))))
 
 (defmethod tui:present ((view view))
+  (setf (tui:dimensions view)
+        (tui:make-rect :x 0 :y 0 :cols (tui:cols *tui*) :rows (tui:rows *tui*)))
   (loop :for wave :across (waves view)
         :do (present-wave wave view)))
-
-(defmethod tui:handle-resize progn ((tui ui))
-  (let ((dimensions (tui:dimensions (tui:focused-window tui))))
-    (setf (tui:rect-cols dimensions) (tui:cols tui)
-          (tui:rect-rows dimensions) (tui:rows tui))))
 
 (defmethod tui:handle-key-event ((window view) tui event)
   nil)

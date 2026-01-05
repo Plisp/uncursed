@@ -35,15 +35,8 @@ To work around this, start a swank server in a terminal session and connect usin
 (loop (sleep 1))
 ```
 Assuming you're not interested in dealing with terminal horrors, the exported `tui` class is an easy way to get started.
-You will care about its `cols`, `rows`, `focused-window`, `windows` list and `event-handler` slots.
-The global event-handler has signature `(event-handler tui-instance event)` events can be found by playing with `examples/input.lisp`.
-
-Some basic methods of interest for subclassing `tui`, each taking the tui as a specialized single argument:
-* `initialize`, which is called to setup the terminal so `enable-mouse` and `set-cursor-shape` may
-be useful to call here. The default method uses the *alternate screen* so that the terminal's contents can be restored on exit,
-enables mouse drag events and makes the cursor invisible.
-* `handle-resize`, which will be called when the terminal is resized, with `cols` and `rows` slots updated to the new size.
-This is unimplemented by default.
+You'll care about its `cols`, `rows`, `focused-window`, `windows` list and `event-handler` slots.
+The global event-handler has signature `(event-handler tui-instance event)` events can be found by testing with `examples/input.lisp`.
 
 ```lisp
 ;;; assuming tui is a package-local nickname for uncursed - see examples/
@@ -63,7 +56,7 @@ This is unimplemented by default.
     (tui:schedule-timer ui (tui:make-timer *tick* #'tick :context (waves view)))
     (tui:run ui)))
 ```
-It's pretty simple as you can see. Get the dimensions, initialize a rect structure with 0-based cell coordinates (top left being origin)
+Pretty simple as you can see. Get the dimensions, initialize a rect structure with 0-based cell coordinates (top left being origin)
 for your `window` subclass's `dimensions` slot and use it to initialize a `tui` instance.
 On that topic, implementing three methods is useful:
 * `defgeneric handle-key-event (window tui event)` - self-explanatory, events take the following forms

@@ -81,25 +81,13 @@
            #:make-rect #:copy-rect
            #:rect-x #:rect-y #:rect-rows #:rect-cols
 
-           #:tui-base
-           ;; methods
-           #:rows #:cols
-           #:windows
-           #:initialize
-           #:run
-           #:stop
-           #:redisplay
-           ;; fns
-           #:wakeup
-
            #:window
            ;; methods
            #:dimensions
-           #:focused-p
            #:present
 
            #:cell
-           ;; methods
+           #:make-cell
            #:cell-style
            #:cell-string
 
@@ -110,12 +98,18 @@
 
            #:tui
            ;; methods
-           #:handle-resize
+           #:windows
+           #:rows #:cols
+           #:run
+           #:stop
+           #:redisplay
            #:focused-window
            #:event-handler
            #:schedule-timer
            #:unschedule-timer
            #:use-palette
+           ;; fn
+           #:wakeup
 
            #:standard-window
            #:window-bounds-error

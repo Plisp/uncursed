@@ -23,16 +23,6 @@
 (defclass game-ui (tui:tui)
   ())
 
-(defmethod tui:initialize :after ((ui game-ui))
-  (tui:enable-mouse :hover t))
-
-(defmethod tui:handle-resize progn ((tui game-ui))
-  (when (or (< (tui:cols tui) *tui-width*) (< (tui:rows tui) 30))
-    (dotimes (i 10)
-      (print "get a bigger terminal"))
-    (sleep 2)
-    (tui:stop tui)))
-
 ;;; sandboard
 
 (defclass sand-view (tui:standard-window)
@@ -331,7 +321,7 @@
         (write-line "get a bigger terminal")
         (progn
           (tui:schedule-timer game-ui (tui:make-timer *tick* #'game-tick))
-          (tui:run game-ui)))))
+          (tui:run game-ui :mouse :hover)))))
 
 (defun main ()
   (if (member :slynk *features*)
