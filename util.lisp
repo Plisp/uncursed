@@ -24,14 +24,14 @@
     (t 1)))
 
 (defun character-width (character)
-  "Returns the displayed width of CHARACTER. See %codepoint-width.
+  "Returns the displayed width of `character'. See %codepoint-width.
 It is recommended to bind *character-widths* dynamically in calling threads."
   (declare (optimize speed))
   (or (gethash character *character-widths*)
       (setf (gethash character *character-widths*) (%wcwidth character))))
 
  ;; add exceptions here
-(eval-when (:execute)
+(eval-when (:load-toplevel :execute)
   ;; only alacritty and windows have this behavior, where it looks terrible without space
   (setf (gethash #\⸻ *character-widths*) 3)
   )
@@ -54,12 +54,12 @@ It is recommended to bind *character-widths* dynamically in calling threads."
                          #+sbcl (format nil "~a: ~a" control (sb-int:strerror))
          :format-arguments args))
 
-(defvar *fallback-terminal-dimensions* (cons 24 80))
+(defparameter *fallback-terminal-dimensions* (cons 24 80))
 
 #+unix
 (defun terminal-dimensions ()
-  "Returns a cons (LINES . COLUMNS) containing the dimensions of the terminal device
-backing FD. Returns NIL on failure."
+  "Returns a cons (lines . columns) containing the dimensions of the terminal device.
+Returns NIL on failure."
   (cffi:with-foreign-object (ws '(:struct c-winsize))
     (when (= 0 (cffi:foreign-funcall "ioctl" :int 1 :int c-get-winsz :pointer ws :int))
       (cffi:with-foreign-slots ((c-ws-rows c-ws-cols) ws (:struct c-winsize))
@@ -158,8 +158,8 @@ Sets process locale from environment."
           old-termios))))
 
   (defun restore-terminal (old-termios fd)
-    "Restores the terminal device backing FD to its original state. ORIG-TERMIOS is a pointer
-to the original termios struct returned by a call to SETUP-TERM which is freed."
+    "Restores the terminal device backing `fd' to its original state. `orig-termios' is a
+pointer to the original termios struct returned by a call to `setup-term', to be freed."
     (when (minusp (tcsetattr fd c-set-attributes-flush old-termios))
       (error-syscall-error "tcsetattr failed"))
     (cffi:foreign-free old-termios)
@@ -250,6 +250,19 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
 
 ;; parsing
 
+(defstruct mouse-data
+  button
+  state
+  row
+  col)
+
+(defstruct event
+  kind
+  (shiftp nil)
+  (altp nil)
+  (controlp nil)
+  (metap nil))
+
 (defun read-integer ()
   (let ((digit-list (loop :with acc
                           :for char = (read-char)
@@ -259,11 +272,12 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                                    (return (nreverse acc)))))
     (parse-integer (coerce digit-list 'string) :junk-allowed t)))
 
-(defun modify-key (key mod)
-  `(,key ,@(when (plusp (logand (1- mod) #b1000)) (list :meta))
-         ,@(when (plusp (logand (1- mod) #b0100)) (list :control))
-         ,@(when (plusp (logand (1- mod) #b0010)) (list :alt))
-         ,@(when (plusp (logand (1- mod) #b0001)) (list :shift))))
+(defun modified-key-event (key mod)
+  (make-event :kind key
+              :shiftp (plusp (logand (1- mod) #b0001))
+              :altp (plusp (logand (1- mod) #b0010))
+              :controlp (logand (1- mod) #b0100)
+              :metap (plusp (logand (1- mod) #b1000))))
 
 ;; application mode, mostly unused
 (defun read-modified-special-keys-and-f1-f4 (code)
@@ -276,10 +290,9 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
                 (#\H :home)
                 (#\F :end))))
     (if (and key mod (<= mod 16))
-        (modify-key key mod)
-        (concatenate 'list
-                      '(:unknown :csi) (princ-to-string code) ";" (princ-to-string mod)
-                       (string terminator)))))
+        (modified-key-event key mod)
+        (make-event :kind (list :csi (princ-to-string code) #\; (princ-to-string mod)
+                                (string terminator))))))
 
 ;; Just forget modified keys on st, I'm only supporting the normal scheme
 (defun code->fkey (code)
@@ -304,14 +317,13 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
     (tagbody
        (if (and fn mod (<= mod 16))
            (if (char= terminator #\~)
-               (return-from read-modified-function-keys (modify-key fn mod))
+               (return-from read-modified-function-keys (modified-key-event fn mod))
                (go fail))
            (go fail))
      fail
        (return-from read-modified-function-keys
-         (concatenate 'list
-                       '(:unknown :csi) (princ-to-string code) ";" (princ-to-string mod)
-                        (string terminator))))))
+         (make-event :kind (list :csi (princ-to-string code) #\; (princ-to-string mod)
+                                 (string terminator)))))))
 
 (defun read-function-and-special-keys ()
   "CSI [code] ~/h (or modified, see above)"
@@ -334,8 +346,7 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
             (go fail))))
      fail
        (return-from read-function-and-special-keys
-         (concatenate 'list
-                       '(:unknown :csi) (princ-to-string code) (string terminator))))))
+         (make-event :kind (list :csi (princ-to-string code) (string terminator)))))))
 
 (defun read-mouse-sgr ()
   "CSI < [code&mods] ; COL ; ROW ; M/m"
@@ -348,9 +359,6 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
          (state (cond ((plusp (logand code 32)) :drag)
                       ((char= %state #\M) :click)
                       ((char= %state #\m) :release)))
-         (mods `(,@(when (plusp (logand code 16)) (list :control))
-                 ,@(when (plusp (logand code 8)) (list :alt))
-                 ,@(when (plusp (logand code 4)) (list :shift))))
          (type (case (+ (ldb (byte 2 0) code)
                         (ash (ldb (byte 2 6) code) 2))
                  (#b0000 :left)
@@ -364,22 +372,21 @@ to the original termios struct returned by a call to SETUP-TERM which is freed."
     (if (and (char= semicolon1 #\;) (char= semicolon2 #\;)
              (or (char= %state #\m) (char= %state #\M))
              code col row)
-        (append (list type state row col) mods)
-        (concatenate 'list
-                      '(:unknown :csi #\<)
-                       (princ-to-string code) (string semicolon1)
-                       (princ-to-string col) (string semicolon2)
-                       (princ-to-string row) (string state)))))
+        (make-event :kind (make-mouse-data :button type :state state :row row :col col)
+                    :shiftp (plusp (logand code 4))
+                    :altp (plusp (logand code 8))
+                    :controlp (plusp (logand code 16)))
+        (make-event :kind (list :csi #\<
+                                (princ-to-string code) #\;
+                                (princ-to-string col) #\;
+                                (princ-to-string row) (string state))))))
 
 (defun read-event ()
-  "Returns a value of one of the following forms:
-* CHARACTER - singular character
-* (CHARACTER [modifiers]...) - modifiers include :shift, :alt, :control and :meta
-* :f1-20, :home, :end, :insert, :delete, :up/:down/:left/:right-arrow, :page-down, :page-up
-* (:function/special [modifiers]...) - above but with modifiers
-* (:left/middle/right/wheel-up/down/left/right/hover :click/release/drag ROW COL [mods]...)
-* (:unknown [key-sequence]...)
-Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
+  "Returns an event structure, where the event-kind slot is one of
+* a character
+* a keyword designating some special key
+* a mouse-event structure
+* a list of codes, notably (:csi #\I/O ... ) may be xterm focus in/out events"
   (flet ((adjusted-c0-p (code)
            (and (< code 32)
                 (/= code (char-code #\esc))
@@ -390,8 +397,8 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
             ;; C0 characters except esc are given the :control modifier
             (let ((code (char-code first)))
               (if (adjusted-c0-p code)
-                  (list (code-char (+ code 96)) :control)
-                  first)))))
+                  (make-event :kind (code-char (+ code 96)) :controlp t)
+                  (make-event :kind first))))))
     ;; we have #\esc
     (let ((second (read-char)))
       (or (and (listen) (or (char= #\[ second) ; CSI
@@ -399,42 +406,38 @@ Notably (:unknown :csi #\I/O) may be xterm focus in/out events."
           (return-from read-event
             (let ((code (char-code second)))
               (if (adjusted-c0-p code)
-                  (list (code-char (+ code 96)) :control :alt)
-                  (list second :alt)))))
+                  (make-event :kind (code-char (+ code 96)) :controlp t :altp t)
+                  (make-event :kind second :altp t)))))
       ;; we have SS3 or CSI
       (let ((third (read-char)))
         (ecase second
           (#\O ; VT220 convention: function keys begin with SS3 on xterms. but why.
-           (case third
-             (#\P :f1) (#\Q :f2) (#\R :f3) (#\S :f4) (#\H :home) (#\F :end)
-             (#\A :up-arrow) (#\B :down-arrow) (#\C :right-arrow) (#\D :left-arrow)
-             (otherwise (list :unknown :ss3 third))))
+           (if-let (special
+                    (case third
+                      (#\P :f1) (#\Q :f2) (#\R :f3) (#\S :f4) (#\H :home) (#\F :end)
+                      (#\A :up-arrow) (#\B :down-arrow)
+                      (#\C :right-arrow) (#\D :left-arrow)))
+             (make-event :kind special)
+             (make-event :kind (list :ss3 third))))
           (#\[ ; parse csi garbage. no rxvt support for now.
-           (case third
-             (#\A :up-arrow) (#\B :down-arrow) (#\C :right-arrow) (#\D :left-arrow)
-             (#\H :home)
-             (#\F :end)
-             ;; SPECIAL below are not modified
-             (#\P :delete) ; legacy, used by st
-             (#\Z (list #\tab :shift))
-             (#\< (read-mouse-sgr))
-             (otherwise
-              (if (digit-char-p third)
-                  (progn
-                    (unread-char third)
-                    (read-function-and-special-keys))
-                  (list :unknown :csi third))))))))))
+           (when-let (special
+                      (case third
+                        (#\A :up-arrow) (#\B :down-arrow) (#\C :right-arrow) (#\D :left-arrow)
+                        (#\H :home)
+                        (#\F :end)
+                        (#\P :delete) ; legacy, used by st
+                        ))
+             (return-from read-event (make-event :kind special)))
+           (cond ((char= third #\Z) (make-event :kind #\tab :shiftp t))
+                 ((char= third #\<) (read-mouse-sgr))
+                 ((digit-char-p third)
+                  (unread-char third)
+                  (read-function-and-special-keys))
+                 (t
+                  (make-event :kind (list :csi third))))))))))
 
 (defun mouse-event-p (event)
-  (and (listp event)
-       (>= (length event) 4)
-       (member (first event) '(:left :middle :right :hover
-                               :wheel-up :wheel-down :wheel-left :wheel-right))
-       (member (second event) '(:click :release :drag nil))
-       (positive-integer-p (third event))
-       (positive-integer-p (fourth event))
-       (every (lambda (elt) (member elt '(:shift :alt :control :meta)))
-              (nthcdr 4 event))))
+  (mouse-data-p (event-kind event)))
 
 ;;; select
 
@@ -693,7 +696,9 @@ level cell grid."
 
   (defmethod make-load-form ((o style) &optional env)
     (declare (ignore env))
-    (make-load-form-saving-slots o)))
+    (make-load-form-saving-slots o))
+
+  (defvar *default-style* (make-style)))
 
 (defun copy-style (style &key fg bg boldp italicp reversep underlinep)
   (make-style :fg (or fg (fg style))
@@ -730,8 +735,6 @@ level cell grid."
     (unless (eq (underlinep a) (underlinep b))
       (setf (getf differences :underline) (underlinep b)))
     differences))
-
-(defvar *default-style* (make-style))
 
 #+unix ; just don't do this on windows, use direct-color
 (defun initialize-color-magic (index attr)

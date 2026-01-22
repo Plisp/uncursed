@@ -35,7 +35,7 @@ To work around this, start a swank server in a terminal session and connect usin
 (loop (sleep 1))
 ```
 Assuming you're not interested in dealing with terminal horrors, the exported `tui` class is an easy way to get started.
-You'll care about its `cols`, `rows`, `focused-window`, `windows` list and `event-handler` slots.
+You'll care about its `root-view`, `focused-view` and `event-handler` slots.
 The global event-handler has signature `(event-handler tui-instance event)` events can be found by testing with `examples/input.lisp`.
 
 ```lisp
@@ -48,8 +48,8 @@ The global event-handler has signature `(event-handler tui-instance event)` even
                                                      :rows (car dimensions)
                                                      :cols (cdr dimensions))))
          (ui
-           (make-instance 'ui :focused-window view
-                              :windows (list view)
+           (make-instance 'ui :focused-view view
+                              :root-view (list view)
                               :event-handler #'tui-handle-event)))
      ;; the #'tick callback should return (values new-interval new-context), or NIL to cancel.
      ;; It's called with the `tui` and provided `context` as arguments
@@ -57,22 +57,22 @@ The global event-handler has signature `(event-handler tui-instance event)` even
     (tui:run ui)))
 ```
 Pretty simple as you can see. Get the dimensions, initialize a rect structure with 0-based cell coordinates (top left being origin)
-for your `window` subclass's `dimensions` slot and use it to initialize a `tui` instance.
+for your `view` subclass's `dimensions` slot and use it to initialize a `tui` instance.
 On that topic, implementing three methods is useful:
-* `defgeneric handle-key-event (window tui event)` - self-explanatory, events take the following forms
+* `defgeneric handle-key-event (view tui event)` - self-explanatory, events take the following forms
 (may not work on all terminals, test with `examples/input.lisp`)
   * `(CHARACTER [modifiers]...)` - modifiers include :shift, :alt, :control and :meta
   * `:f1-20, :home, :end, :insert, :delete, :up/:down/:left/:right-arrow, :page-down, :page-up`
   * `(:function-or-special-key [modifiers]...)` - above but with modifiers
 
-* `defgeneric handle-mouse-event (window tui button state line col &key &allow-other-keys` provides mouse button, `:click`/`:release`/`:drag` state
-and position relative to the window. Keyword arguments may include the modifiers above.
+* `defgeneric handle-mouse-event (view tui button state line col &key &allow-other-keys` provides mouse button, `:click`/`:release`/`:drag` state
+and position relative to the view. Keyword arguments may include the modifiers above.
 
-* `defgeneric present (window)`, called each redisplay on every window. Drawing is done with:
+* `defgeneric present (view)`, called each redisplay on every view. Drawing is done with:
   * `(put char line col &optional style)` which writes `char` at 1-based line/col coordinates relative to its position
   * `(puts string line col &optional style)` same thing with a string
 
-Both functions may raise a `window-bounds-error` when attempting to draw outside the window's dimensions and
+Both functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and
 optionally accept a `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported.
 ```lisp
 (defstruct (style (:conc-name nil))

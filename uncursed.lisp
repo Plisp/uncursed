@@ -16,7 +16,7 @@
              :cols (or cols (rect-cols rect))))
 
 (defstruct (cell (:conc-name cell-))
-  (style (copy-style *default-style*) :type style)
+  (style *default-style* :type style)
   (string (string #\space) :type simple-string))
 
 (defmethod print-object ((cell cell) stream)
@@ -35,28 +35,22 @@
 
 (deftype buffer () '(array cell))
 
-;;; main API
+;;; loop API
 
-(defgeneric present (window))
-(defclass window ()
-  ((%dimensions :initarg :dimensions
-                :initform (error "window dimensions not provided")
-                :accessor dimensions
-                :type rect))
-  (:documentation "Pure data."))
-
-(defmethod print-object ((window window) stream)
-  (print-unreadable-object (window stream)
-    (format stream "<window: ~a>" (dimensions window))))
+(defvar *put-buffer*)
 
 (defgeneric run (tui &key &allow-other-keys))
 (defgeneric stop (tui)
   (:documentation "Causes the terminal to be restored to its original state immediately.
-May only be called from within the dynamic-extent of a call to RUN."))
-(defgeneric redisplay (tui))
+May only be called from within the dynamic-extent of a call to `run'."))
+(defgeneric dispatch-event (tui event))
+(defgeneric rows (tui))
+(defgeneric cols (tui))
+(defgeneric redisplay (tui)
+  (:documentation "Any drawing should be done in an unqualified method."))
 
 (defun wakeup (tui)
-  "Wakes up TUI in a thread-safe manner."
+  "Wakes up the event loop of `tui' in a thread-safe manner."
   #+unix
   (cffi:with-foreign-object (buf :char)
     (when (minusp (sys::c-write (sys::write-fd (%wakeup-pipe tui)) buf 1))
@@ -66,29 +60,15 @@ May only be called from within the dynamic-extent of a call to RUN."))
       (sys:error-syscall-error "setevent")))
 
 (defclass tui ()
-  ((%rows :initarg :rows :accessor rows)
-   (%cols :initarg :columns :accessor cols)
-   (%termios :initform nil :accessor %termios)
+  ((%termios :initform nil :accessor %termios)
    (%wakeup-pipe :initform nil :accessor %wakeup-pipe)
    #+unix (%winch-pipe :initform nil :accessor %winch-pipe)
-   (%screen :initarg :screen
-            :accessor screen
+   (%screen :accessor screen
             :type buffer
             :documentation "The contents of the screen")
-   (%canvas :initarg :canvas
-            :accessor canvas
+   (%canvas :accessor canvas
             :type buffer
             :documentation "The contents to be drawn to the screen")
-   (%windows :initarg :windows
-             :initform (list)
-             :accessor windows
-             :documentation "Windows in drawing order.")
-   (%focused-window :initarg :focused-window
-                    :accessor focused-window
-                    :type window)
-   (%event-handler :initform (error "must provide an event handler")
-                   :initarg :event-handler
-                   :accessor event-handler)
    (%timers :initform (list)
             :accessor timers)
    (%use-palette :initform nil
@@ -96,22 +76,22 @@ May only be called from within the dynamic-extent of a call to RUN."))
                  :accessor use-palette
                  :type (member t nil :approximate))))
 
-(define-condition window-bounds-error (sys:uncursed-error)
+(define-condition rect-bounds-error (sys:uncursed-error)
   ((coordinate :initarg :coordinate
-               :reader window-bounds-error-coordinate
+               :reader rect-bounds-error-coordinate
                :type integer)
    (bounds :initarg :bounds
-           :reader window-bounds-error-bounds
+           :reader rect-bounds-error-bounds
            :type (or (eql :line) (eql :column)))
-   (window :initarg :window
-           :reader window-bounds-error-window
-           :type window))
+   (rect :initarg :rect
+         :reader rect-bounds-error-rect
+         :type rect))
   (:report (lambda (condition stream)
              (format stream "~d is not a valid ~a for ~a"
-                     (window-bounds-error-coordinate condition)
-                     (window-bounds-error-bounds condition)
-                     (window-bounds-error-window condition))))
-  (:documentation "Signaled if an attempt is made to index outside a window's bounds"))
+                     (rect-bounds-error-coordinate condition)
+                     (rect-bounds-error-bounds condition)
+                     (rect-bounds-error-rect condition))))
+  (:documentation "Signaled if an attempt is made to index outside a rect's bounds"))
 
 (define-condition wide-char-overwrite-error (sys:uncursed-error)
   ((y :initarg :y
@@ -125,43 +105,30 @@ May only be called from within the dynamic-extent of a call to RUN."))
                      (wide-char-overwrite-error-y condition)
                      (wide-char-overwrite-error-x condition)
                      (wide-char-overwrite-error-buffer condition))))
-  (:documentation "Signaled if an attempt is made to overwrite a wide character."))
-
-(defclass standard-window (window)
-  ())
-
-(defgeneric handle-mouse-event (window tui button state line col &key &allow-other-keys)
-  (:documentation "Interface may change. Methods may optionally accept boolean keyword
-arguments :shift, :alt, :control and :meta."))
-(defgeneric handle-key-event (window tui event)
-  (:documentation "Interface may change."))
-
-(defvar *put-buffer*)
-(defvar *put-window*)
+  (:documentation "Signaled if an attempt is made to overwrite the middle cells of
+a wide character."))
 
 ;; note that triple-width is rare enough (e.g. three-em-dash) and terminal support is
 ;; so lacking that there's no point supporting it
-(defun put (char line col &optional style
-                            (put-window *put-window*) (put-buffer *put-buffer*))
-  (or (and put-buffer put-window) (error "PUT-BUFFER and PUT-WINDOW not both provided"))
+(defun put (char line col &optional rect style (put-buffer *put-buffer*))
+  (or put-buffer (error "PUT-BUFFER not provided"))
   #-sbcl (check-type put-buffer buffer)
-  (check-type put-window window)
+  (check-type rect rect)
   (check-type char character)
   (check-type style (or style null))
-  (let ((dimensions (dimensions put-window))
-        (width (character-width char)))
-    (or (<= 1 line (rect-rows dimensions))
-        (error 'window-bounds-error
+  (let ((width (character-width char)))
+    (or (<= 1 line (rect-rows rect))
+        (error 'rect-bounds-error
                :coordinate line
                :bounds :line
-               :window put-window))
-    (or (<= 1 col (- (rect-cols dimensions) (max 0 (1- width))))
-        (error 'window-bounds-error
+               :rect rect))
+    (or (<= 1 col (- (rect-cols rect) (max 0 (1- width))))
+        (error 'rect-bounds-error
                :coordinate col
                :bounds :column
-               :window put-window))
-    (let* ((cell-y (+ (rect-y dimensions) (1- line)))
-           (cell-x (+ (rect-x dimensions) (1- col)))
+               :rect rect))
+    (let* ((cell-y (+ (rect-y rect) (1- line)))
+           (cell-x (+ (rect-x rect) (1- col)))
            (cell (aref put-buffer cell-y cell-x)))
       (if (zerop width) ; this should not be common
           (let* ((string (cell-string cell))
@@ -209,31 +176,30 @@ arguments :shift, :alt, :control and :meta."))
             (and style (setf (cell-style cell) style)))))
     width))
 
-(defun puts (string line col &optional style
-                               (window *put-window*) (put-buffer *put-buffer*))
-  (check-type window window)
+(defun puts (string line col rect &optional style (put-buffer *put-buffer*))
+  (check-type rect rect)
   (check-type string string)
   (check-type style (or style null))
-  (let ((dimensions (dimensions window))
+  (let ((rect (rect rect))
         (string-display-width (display-width string))
         (last-non-combining-char-pos (position-if-not #'zerop string
                                                       :key #'character-width
                                                       :from-end t)))
-    (or (<= 1 line (rect-rows dimensions))
-        (error 'window-bounds-error
+    (or (<= 1 line (rect-rows rect))
+        (error 'rect-bounds-error
                :coordinate line
                :bounds :line
-               :window window))
+               :rect rect))
     (or (plusp col)
-        (error 'window-bounds-error
+        (error 'rect-bounds-error
                :coordinate col
                :bounds :column
-               :window window))
-    (or (<= (+ (1- col) string-display-width) (rect-cols dimensions))
-        (error 'window-bounds-error
+               :rect rect))
+    (or (<= (+ (1- col) string-display-width) (rect-cols rect))
+        (error 'rect-bounds-error
                :coordinate (+ (1- col) string-display-width)
                :bounds :column
-               :window window))
+               :rect rect))
     (if last-non-combining-char-pos
         (let* ((last-non-combining-char (char string last-non-combining-char-pos))
                (last-non-combining-char-visual-offset
@@ -242,8 +208,8 @@ arguments :shift, :alt, :control and :meta."))
                (first-non-combining-char-pos
                  (position-if-not #'zerop string :key #'character-width))
                (first-non-combining-char (char string first-non-combining-char-pos))
-               (first-cell-y (+ (rect-y dimensions) (1- line)))
-               (first-cell-x (+ (rect-x dimensions) (1- col)))
+               (first-cell-y (+ (rect-y rect) (1- line)))
+               (first-cell-x (+ (rect-x rect) (1- col)))
                (first-cell (aref put-buffer first-cell-y first-cell-x))
                first-to-overwrite)
           ;; signal overwrite error for first character early, *not writing to the buffer*
@@ -266,7 +232,7 @@ arguments :shift, :alt, :control and :meta."))
           (or (put last-non-combining-char
                    line (+ col last-non-combining-char-visual-offset)
                    style
-                   window put-buffer)
+                   rect put-buffer)
               ;; if IGNORE-PUT restart selected, abort here, before anything is written
               (return-from puts))
           ;; write first character after we've ascertained that the caller doesn't want to
@@ -292,48 +258,49 @@ arguments :shift, :alt, :control and :meta."))
                                      (lambda (e)
                                        (declare (ignore e))
                                        (invoke-restart 'overwrite-char))))
-                      (put char line put-col style window)))
+                      (put char line put-col style rect)))
           ;; write trailing combining characters
           (loop :for i :from (1+ last-non-combining-char-pos) :below (length string)
                 :do (put (char string i)
                          line (+ col last-non-combining-char-visual-offset)
                          style
-                         window)))
+                         rect)))
         ;; all combining characters, all fit at the index
         (loop :for char :across string
-              :do (put char line col style window)))
+              :do (put char line col style rect)))
     string-display-width))
 
-(defun put-style (style rect &optional (window *put-window*) (put-buffer *put-buffer*))
-  (check-type window window)
+(defun put-style (style region &optional rect (put-buffer *put-buffer*))
+  (or put-buffer (error "PUT-BUFFER not provided"))
+  #-sbcl (check-type put-buffer buffer)
+  (check-type region rect)
   (check-type rect rect)
   (check-type style style)
-  (let ((dimensions (dimensions window)))
-    (or (<= 0 (rect-y rect))
-        (error 'window-bounds-error
-               :coordinate (rect-y rect)
-               :bounds :line
-               :window window))
-    (or (<= (+ (rect-y rect) (rect-rows rect)) (rect-rows dimensions))
-        (error 'window-bounds-error
-               :coordinate (+ (rect-y rect) (rect-rows rect))
-               :bounds :line
-               :window window))
-    (or (<= 0 (rect-x rect))
-        (error 'window-bounds-error
-               :coordinate (rect-x rect)
-               :bounds :column
-               :window window))
-    (or (<= (+ (rect-x rect) (rect-cols rect)) (rect-cols dimensions))
-        (error 'window-bounds-error
-               :coordinate (+ (rect-x rect) (rect-cols rect))
-               :bounds :column
-               :window window))
-    (loop :repeat (rect-rows rect)
-          :for y :from (+ (rect-y dimensions) (rect-y rect))
-          :do (loop :repeat (rect-cols rect)
-                    :for x :from (+ (rect-x dimensions) (rect-x rect))
-                    :do (setf (cell-style (aref put-buffer y x)) style)))))
+  (or (<= 0 (rect-y region))
+      (error 'rect-bounds-error
+             :coordinate (rect-y region)
+             :bounds :line
+             :rect rect))
+  (or (<= (+ (rect-y region) (rect-rows region)) (rect-rows rect))
+      (error 'rect-bounds-error
+             :coordinate (+ (rect-y region) (rect-rows region))
+             :bounds :line
+             :rect rect))
+  (or (<= 0 (rect-x region))
+      (error 'rect-bounds-error
+             :coordinate (rect-x region)
+             :bounds :column
+             :rect rect))
+  (or (<= (+ (rect-x region) (rect-cols region)) (rect-cols rect))
+      (error 'rect-bounds-error
+             :coordinate (+ (rect-x region) (rect-cols region))
+             :bounds :column
+             :rect rect))
+  (loop :repeat (rect-rows region)
+        :for y :from (+ (rect-y rect) (rect-y region))
+        :do (loop :repeat (rect-cols region)
+                  :for x :from (+ (rect-x rect) (rect-x region))
+                  :do (setf (cell-style (aref put-buffer y x)) style))))
 
 (defun buffer-diff (old new)
   (assert (= (array-total-size old) (array-total-size new)))
@@ -348,52 +315,54 @@ arguments :shift, :alt, :control and :meta."))
               (vector-push-extend (list* ncell y x) diff))
         :finally (return diff)))
 
-(defmethod present :around ((window standard-window))
-  (let ((*put-window* window))
-    (call-next-method)))
+(defun clear-buffer (buffer)
+  (loop :for i :below (array-total-size buffer)
+        :do (setf (row-major-aref buffer i) (make-cell))))
 
 (defun handle-resize (tui)
   (sys:set-style *default-style* (use-palette tui))
   (sys:clear-screen) ; terminals typically garble the screen irrecoverably
-  (let ((dimensions (terminal-dimensions)))
-    (setf (rows tui) (car dimensions)
-          (cols tui) (cdr dimensions)))
-  ;; fix internal structures
-  (with-accessors ((canvas canvas)
-                   (screen screen)
-                   (rows rows)
-                   (cols cols))
-      tui
-    (let ((old-lines (array-dimension canvas 0))
-          (old-columns (array-dimension canvas 1)))
-      (setf canvas (adjust-array canvas (list rows cols)))
-      (setf screen (adjust-array screen (list rows cols)))
-      ;; fill empty cols in existing rows
-      (loop :for line :below rows
-            :do (loop :for column :from old-columns :below cols
-                      :do (setf (aref canvas line column) (make-cell)
-                                (aref screen line column) (make-cell))))
-      ;; fill new rows
-      (loop :for line :from old-lines :below rows
-            :do (loop :for column :below cols
-                      :do (setf (aref canvas line column) (make-cell)
-                                (aref screen line column) (make-cell))))
-      ;; screen should be clear
-      (loop :for i :below (array-total-size screen)
-            :do (setf (cell-string (row-major-aref screen i)) "")))))
 
-(defmethod redisplay ((tui tui))
-  (loop :with canvas = (canvas tui)
-        :for idx :below (array-total-size canvas)
-        :do (setf (row-major-aref canvas idx) (make-cell)))
-  ;;
+  ;; fix internal structures
   (with-accessors ((canvas canvas)
                    (screen screen))
       tui
-    ;; we do not want windows to have a stable reference/access to the buffer
+    (clear-buffer screen)
+    ;; resize
+    (destructuring-bind (rows . cols)
+        (terminal-dimensions)
+      ;; resize buffers
+      (let ((old-lines (array-dimension canvas 0))
+            (old-columns (array-dimension canvas 1)))
+        (setf canvas (adjust-array canvas (list rows cols)))
+        (setf screen (adjust-array screen (list rows cols)))
+        ;; fill empty cols in existing rows
+        (loop :for line :below rows
+              :do (loop :for column :from old-columns :below cols
+                        :do (setf (aref canvas line column) (make-cell)
+                                  (aref screen line column) (make-cell))))
+        ;; fill new rows
+        (loop :for line :from old-lines :below rows
+              :do (loop :for column :below cols
+                        :do (setf (aref canvas line column) (make-cell)
+                                  (aref screen line column) (make-cell))))))))
+
+(defmethod rows ((tui tui)) (array-dimension (canvas tui) 0))
+(defmethod cols ((tui tui)) (array-dimension (canvas tui) 1))
+
+(defmethod redisplay :around ((tui tui))
+  (with-accessors ((canvas canvas)
+                   (screen screen))
+      tui
+    (clear-buffer canvas)
+    ;; We do not want views to have a stable reference/access to the internal buffer.
+    ;; Another option would be to pass in context explicitly but drawing always
+    ;; unambiguously ought to refer dynamically to the single canvas anyways, and should
+    ;; never be called elsewhere
     (let ((*put-buffer* canvas))
-      (map nil #'present (windows tui)))
-    ;; render diff to terminal
+      (call-next-method))
+
+    ;; compute diff and render
     (sys:set-style *default-style* (use-palette tui))
     (loop :with diff = (buffer-diff screen canvas)
           :with current-style = *default-style*
@@ -413,49 +382,23 @@ arguments :shift, :alt, :control and :meta."))
     ;; swap buffers
     (rotatef screen canvas)))
 
-(defun dispatch-event (tui event)
-  (or (if (mouse-event-p event)
-          (loop :for window :in (copy-list (windows tui))
-                  :thereis (dispatch-mouse-event window tui event))
-          (handle-key-event (focused-window tui) tui event))
-      (funcall (event-handler tui) tui event)))
-
-(defun dispatch-mouse-event (window tui event)
-  (destructuring-bind (button state line col &rest modifiers) event
-    (let* ((dimensions (dimensions window))
-           (relative-line (- line (rect-y dimensions)))
-           (relative-column (- col (rect-x dimensions))))
-      (when (and (<= 1 relative-line (rect-rows dimensions))
-                 (<= 1 relative-column (rect-cols dimensions)))
-        (let ((shift (member :shift modifiers))
-              (alt (member :alt modifiers))
-              (control (member :control modifiers))
-              (meta (member :meta modifiers)))
-          (handle-mouse-event window tui button state relative-line relative-column
-                              :shift shift :alt alt :control control :meta meta))))))
-
 ;;
 ;;; timers
 ;;
-;; timers are not simple callbacks since a single closure may be registered multiple
-;; times at distinct intervals, each of which must have its own identity. Moreover these
-;; instances may end up sharing captured mutable context, so I decided to make this explicit
+
 (defclass timer ()
   ((%callback :initarg :callback
               :accessor timer-callback
-              :documentation "A function that is run when the timer expires. It is a
-function of two arguments, the TUI object and context it was scheduled with. The callback
-is expected to return one value: either the next timer expiry interval in seconds or NIL,
-meaning to cancel the timer. A second optional return value assigns a new timer context.")
-   (%context :initarg :context
-             :accessor timer-context)
+              :documentation "A function that is run when the timer expires. It takes
+one argument: the `tui' object it was scheduled with. The callback is expected to return
+either the next timer expiry interval in seconds or NIL meaning to cancel the timer.")
    (%interval :initarg :interval
               :accessor timer-interval
               :type (real 0))))
 
-(defun make-timer (interval callback &key context)
-  "Interval is given in seconds"
-  (make-instance 'timer :interval interval :callback callback :context context))
+(defun make-timer (interval callback)
+  "The `interval' is given in seconds"
+  (make-instance 'timer :interval interval :callback callback))
 
 (defmethod schedule-timer ((tui tui) (timer timer))
   (let ((interval (timer-interval timer))
@@ -465,19 +408,17 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
     (push timer (timers tui)) ; TODO maybe use a heap if people like lots of timers
     (setf (timers tui) (stable-sort (timers tui) #'< :key #'timer-interval))))
 
-(defmethod unschedule-timer ((tui tui) (timer timer))
+(defmethod cancel-timer ((tui tui) (timer timer))
   (setf (timers tui) (delete timer (timers tui))))
 
 (defun process-timer (tui timer)
-  (multiple-value-bind (next-interval new-context)
-      (funcall (timer-callback timer) tui (timer-context timer))
-    (when next-interval
-      (setf (timer-interval timer) next-interval)
-      (schedule-timer tui timer))
-    (when new-context
-      (setf (timer-context timer) new-context))))
+  (when-let (next-interval (funcall (timer-callback timer) tui))
+    (setf (timer-interval timer) next-interval)
+    (schedule-timer tui timer)))
 
-;;; run
+;;
+;;; main event loop
+;;
 
 #+unix
 (defun write-seconds-to-timeval (timeout timeval)
@@ -495,21 +436,18 @@ meaning to cancel the timer. A second optional return value assigns a new timer 
 (defmethod run :around ((tui tui) &key (mouse t) (use-altscreen t) (cursor-shape :invisible))
   (let ((sys:*character-widths* (make-hash-table))
         #+(or sbcl cmu) (*terminal-io* *standard-output*))
-    (destructuring-bind (rows . cols)
-        (terminal-dimensions)
-      (setf (rows tui) rows
-            (cols tui) cols))
     ;; fill canvas
     (with-accessors ((canvas canvas)
-                     (screen screen)
-                     (rows rows)
-                     (cols cols))
+                     (screen screen))
         tui
-      (setf canvas (make-array (list rows cols)))
-      (setf screen (make-array (list rows cols)))
-      (loop :for idx :below (array-total-size canvas)
-            :do (setf (row-major-aref canvas idx) (make-cell)
-                      (row-major-aref screen idx) (make-cell))))
+      (destructuring-bind (rows . cols)
+          (terminal-dimensions)
+        (setf canvas (make-array (list rows cols)))
+        (setf screen (make-array (list rows cols))))
+      (clear-buffer canvas)
+      (clear-buffer screen))
+
+    ;; setup foreign terminal attributes
     #+unix (progn
              (ti:set-terminal (uiop:getenv "TERM"))
              (setf (%termios tui) (sys:setup-terminal sys:+stdin+)))

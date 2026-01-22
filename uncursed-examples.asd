@@ -8,7 +8,8 @@
                 :serial t
                 :components ((:file "input")
                              (:file "shockwave")
-                             (:module "old"
-                              :components
-                              ((:file "sand-game")
-                               (:file "paint")))))))
+                             ;; (:module "old"
+                             ;;  :components
+                             ;;  ((:file "sand-game")
+                             ;;   (:file "paint")))
+                             ))))

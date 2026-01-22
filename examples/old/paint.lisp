@@ -67,10 +67,10 @@
           :do (loop :for i :from 0 :below (array-total-size layer)
                     :for cell = (row-major-aref layer i)
                     ;; don't do this at home
-                    :do (setf (tui:cell-string (row-major-aref tui::*put-buffer* i))
-                              (tui:cell-string cell)
-                              (tui:cell-style (row-major-aref tui::*put-buffer* i))
-                              (tui:cell-style cell))))))
+                    :do (setf (tui::cell-string (row-major-aref tui::*put-buffer* i))
+                              (tui::cell-string cell)
+                              (tui::cell-style (row-major-aref tui::*put-buffer* i))
+                              (tui::cell-style cell))))))
 
 (defmethod tui:handle-mouse-event ((window layer-view) tui button state line col &key)
   (when (and (or (eq state :click) (eq state :drag))
@@ -146,7 +146,7 @@
                                     :event-handler #'tui-handle-event
                                     :use-palette use-palette)))
     (loop :for idx :below (array-total-size initial-layer)
-          :do (setf (row-major-aref initial-layer idx) (tui:make-cell)))
+          :do (setf (row-major-aref initial-layer idx) (tui::make-cell)))
     (tui:run *paint-ui*)))
 
 (defun main (&optional use-palette)

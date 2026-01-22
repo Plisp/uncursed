@@ -1,11 +1,12 @@
 ;;;; package.lisp
 
 (defpackage #:uncursed-sys
-  (:use :cl #:alexandria)
+  (:use :cl :alexandria)
   (:export #:uncursed-error
            #:syscall-error
            #:error-syscall-error
 
+           #:color
            #:red #:green #:blue
 
            #:style
@@ -29,9 +30,15 @@
            #:set-cursor-shape
            #:set-foreground #:set-background
            #:set-style #:set-style-from-old
+
+           #:event
+           #:event-kind #:event-shiftp #:event-altp #:event-controlp #:event-metap
+           #:mouse-event-p
+           #:mouse-data
+           #:mouse-data-button #:mouse-data-state #:mouse-data-row #:mouse-data-col
+
            #:read-event
            #:read-event-timeout
-           #:mouse-event-p
 
            #:catch-sigwinch
            #:reset-sigwinch
@@ -39,7 +46,7 @@
            ))
 
 (defpackage #:uncursed
-  (:use :cl)
+  (:use :cl :alexandria)
   (:import-from #:uncursed-sys
                 #:uncursed-error
 
@@ -49,10 +56,16 @@
                 #:enable-mouse #:disable-mouse
                 #:enable-focus-tracking #:disable-focus-tracking
                 #:enable-alternate-screen #:disable-alternate-screen
-                #:mouse-event-p
                 #:set-cursor-shape
+                #:event
+                #:event-kind #:event-shiftp #:event-altp #:event-controlp #:event-metap
+                #:mouse-event-p
+                #:mouse-data
+                #:mouse-data-button #:mouse-data-state #:mouse-data-row #:mouse-data-col
 
+                #:color
                 #:red #:green #:blue
+
                 #:style
                 #:make-style #:copy-style
                 #:fg #:bg #:boldp #:italicp #:reversep #:underlinep
@@ -66,11 +79,17 @@
            #:terminal-dimensions
            #:enable-mouse #:disable-mouse
            #:enable-focus-tracking #:disable-focus-tracking
-           #:enable-alternate-screen #:disable-alternate-screen
-           #:mouse-event-p
            #:set-cursor-shape
 
+           #:event
+           #:event-kind #:event-shiftp #:event-altp #:event-controlp #:event-metap
+           #:mouse-event-p
+           #:mouse-data
+           #:mouse-data-button #:mouse-data-state #:mouse-data-row #:mouse-data-col
+
+           #:color
            #:red #:green #:blue
+
            #:style
            #:make-style #:copy-style
            #:fg #:bg #:boldp #:italicp #:reversep #:underlinep
@@ -81,16 +100,6 @@
            #:make-rect #:copy-rect
            #:rect-x #:rect-y #:rect-rows #:rect-cols
 
-           #:window
-           ;; methods
-           #:dimensions
-           #:present
-
-           #:cell
-           #:make-cell
-           #:cell-style
-           #:cell-string
-
            #:make-timer
            ;; methods
            #:timer-callback
@@ -98,33 +107,27 @@
 
            #:tui
            ;; methods
-           #:windows
-           #:rows #:cols
            #:run
            #:stop
+           #:dispatch-event
+           #:rows #:cols
            #:redisplay
-           #:focused-window
-           #:event-handler
+
            #:schedule-timer
-           #:unschedule-timer
+           #:cancel-timer
            #:use-palette
            ;; fn
            #:wakeup
-
-           #:standard-window
-           #:window-bounds-error
-           ;; methods
-           #:handle-mouse-event
-           #:handle-key-event
 
            #:put
            #:puts
            #:put-style
            ;; errors
-           #:window-bounds-error
-           #:window-bounds-error-coordinate
-           #:window-bounds-error-bounds
-           #:window-bounds-error-window
+           #:rect-bounds-error
+           #:rect-bounds-error
+           #:rect-bounds-error-coordinate
+           #:rect-bounds-error-bounds
+           #:rect-bounds-error-rect
            #:wide-char-overwrite-error
            ;; restarts
            #:overwrite-char
