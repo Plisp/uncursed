@@ -69,7 +69,7 @@ May only be called from within the dynamic-extent of a call to `run'."))
    (%canvas :accessor canvas
             :type buffer
             :documentation "The contents to be drawn to the screen")
-   (%timers :initform (list)
+   (%timers :initform (pileup:make-heap #'< :key #'timer-interval)
             :accessor timers)
    (%use-palette :initform nil
                  :initarg :use-palette
@@ -405,11 +405,10 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
         (callback (timer-callback timer)))
     (check-type callback function)
     (check-type interval (real 0))
-    (push timer (timers tui)) ; TODO maybe use a heap if people like lots of timers
-    (setf (timers tui) (stable-sort (timers tui) #'< :key #'timer-interval))))
+    (pileup:heap-insert timer (timers tui))))
 
 (defmethod cancel-timer ((tui tui) (timer timer))
-  (setf (timers tui) (delete timer (timers tui))))
+  (pileup:heap-delete timer (timers tui)))
 
 (defun process-timer (tui timer)
   (when-let (next-interval (funcall (timer-callback timer) tui))
@@ -517,7 +516,7 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
           :with last-time = (get-internal-real-time)
           :with nfds = (1+ (max (sys::read-fd wakeup-pipe) (sys::read-fd winch-pipe)))
           :with got-stdin
-          :for next-timer = (pop timers)
+          :for next-timer = (pileup:heap-pop timers)
           :for timeout = (when next-timer
                            (write-seconds-to-timeval (timer-interval next-timer)
                                                      timeval))
@@ -529,15 +528,15 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
                          (let* ((now (get-internal-real-time))
                                 (elapsed (/ (- now last-time)
                                             internal-time-units-per-second)))
-                           (map nil (lambda (timer)
-                                      (setf (timer-interval timer)
-                                            (max (- (timer-interval timer) elapsed)
-                                                 0)))
-                                timers)
+                           (pileup:map-heap (lambda (timer)
+                                              (setf (timer-interval timer)
+                                                    (max (- (timer-interval timer) elapsed)
+                                                         0)))
+                                            timers)
                            (setf last-time now)))
                        (reschedule-and-update-timers ()
                          (when next-timer
-                           (push next-timer timers)
+                           (pileup:heap-insert next-timer timers)
                            (update-timeouts))))
                 ;; setup select
                 (sys::fd-zero fd-set)
@@ -584,7 +583,7 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
         (loop
           :with last-time = (get-internal-real-time)
           :with got-stdin
-          :for next-timer = (pop timers)
+          :for next-timer = (pileup:heap-pop timers)
           :for timeout = (when next-timer
                            (truncate (* 1000 (timer-interval next-timer))))
           :do (when (or redisplay-on-input (not got-stdin))
@@ -594,15 +593,15 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
                          (let* ((now (get-internal-real-time))
                                 (elapsed (/ (- now last-time)
                                             internal-time-units-per-second)))
-                           (map nil (lambda (timer)
-                                      (setf (timer-interval timer)
-                                            (max (- (timer-interval timer) elapsed)
-                                                 0)))
-                                timers)
+                           (pileup:map-heap (lambda (timer)
+                                              (setf (timer-interval timer)
+                                                    (max (- (timer-interval timer) elapsed)
+                                                         0)))
+                                            timers)
                            (setf last-time now)))
                        (reschedule-and-update-timers ()
                          (when next-timer
-                           (push next-timer timers)
+                           (pileup:heap-insert next-timer timers)
                            (update-timeouts))))
                 ;; DWORD WaitForMultipleObjects(DWORD len, HANDLE *handles,
                 ;;                              BOOL waitAll, DWORD timeout_ms)

@@ -199,14 +199,13 @@
 (defun tui-main ()
   (let ((tui (make-instance 'ui)))
     (setf *tui* tui)
-    ;; note: waves is adjustable
-    (tui:schedule-timer tui (tui:make-timer *tick*
-                                            (lambda (tui)
-                                              (restart-case
-                                                  (tick tui)
-                                                (continue ()
-                                                  :report "Continue from tick error"
-                                                  *tick*)))))
+    (tui:schedule-timer tui
+                        (tui:make-timer *tick*
+                                        (lambda (tui)
+                                          (restart-case (tick tui)
+                                            (continue ()
+                                              :report "Continue from tick error"
+                                              *tick*)))))
     (tui:run tui :redisplay-on-input nil)
     #+sbcl
     (sb-concurrency:send-message *log* :stop)))
