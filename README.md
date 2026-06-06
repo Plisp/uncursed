@@ -22,7 +22,7 @@ n.b. `sand-game.lisp` features the color/timer functionality of the library and 
 - [x] thread-safe `wakeup`
 - [x] basic documentation
 - [x] Windows support (new!)
-- [ ] layout abstraction
+- [.] layout abstraction
 - [ ] account for network character delays
 - [ ] high-level widget modules
 
@@ -34,56 +34,31 @@ To work around this, start a swank server in a terminal session and connect usin
 (swank:create-server :dont-close t)
 (loop (sleep 1))
 ```
-Assuming you're not interested in dealing with terminal horrors, the exported `tui` class is an easy way to get started.
-You'll care about its `root-view`, `focused-view` and `event-handler` slots.
-The global event-handler has signature `(event-handler tui-instance event)` events can be found by testing with `examples/input.lisp`.
+Assuming you're not interested in dealing with terminal horrors, the exported `tui` class is an easy way to get started (see `examples`). Further documentation of the `elemental` classes will be written later.
 
+All addressing is done relative to `rect`s. `rows` and `cols` get the toplevel terminal dimensions from a `tui` instance.
 ```lisp
-;;; assuming tui is a package-local nickname for uncursed - see examples/
-(defun tui-main ()
-  (let* ((dimensions (tui:terminal-dimensions))
-         (view
-           (make-instance 'view
-                          :dimensions (tui:make-rect :x 0 :y 0
-                                                     :rows (car dimensions)
-                                                     :cols (cdr dimensions))))
-         (ui
-           (make-instance 'ui :focused-view view
-                              :root-view (list view)
-                              :event-handler #'tui-handle-event)))
-     ;; the #'tick callback should return (values new-interval new-context), or NIL to cancel.
-     ;; It's called with the `tui` and provided `context` as arguments
-    (tui:schedule-timer ui (tui:make-timer *tick* #'tick :context (waves view)))
-    (tui:run ui)))
-```
-Pretty simple as you can see. Get the dimensions, initialize a rect structure with 0-based cell coordinates (top left being origin)
-for your `view` subclass's `dimensions` slot and use it to initialize a `tui` instance.
-On that topic, implementing three methods is useful:
-* `defgeneric handle-key-event (view tui event)` - self-explanatory, events take the following forms
-(may not work on all terminals, test with `examples/input.lisp`)
-  * `(CHARACTER [modifiers]...)` - modifiers include :shift, :alt, :control and :meta
-  * `:f1-20, :home, :end, :insert, :delete, :up/:down/:left/:right-arrow, :page-down, :page-up`
-  * `(:function-or-special-key [modifiers]...)` - above but with modifiers
-
-* `defgeneric handle-mouse-event (view tui button state line col &key &allow-other-keys` provides mouse button, `:click`/`:release`/`:drag` state
-and position relative to the view. Keyword arguments may include the modifiers above.
-
-* `defgeneric present (view)`, called each redisplay on every view. Drawing is done with:
-  * `(put char line col &optional style)` which writes `char` at 1-based line/col coordinates relative to its position
-  * `(puts string line col &optional style)` same thing with a string
-
-Both functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and
-optionally accept a `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported.
-```lisp
-(defstruct (style (:conc-name nil))
-  (fg nil :type (or null (integer #x000000 #xffffff)))
-  (bg nil :type (or null (integer #x000000 #xffffff)))
-  (boldp nil :type boolean)
-  (italicp nil :type boolean)
-  (reversep nil :type boolean)
-  (underlinep nil :type boolean))
+(defstruct (rect (:conc-name rect-) (:copier nil))
+  (x (error "rect X not provided") :type fixnum :read-only t)
+  (y (error "rect Y not provided") :type fixnum :read-only t)
+  (rows (error "rect ROWS not provided") :type fixnum :read-only t)
+  (cols (error "rect COLS not provided") :type fixnum :read-only t))
 ```
 
+* `(put char line col rect &optional style)` which writes `char` at 1-based line/col coordinates relative to `rect`.
+* `(puts string line col &optional rect style)` same thing with a string, with truncating behavior at rect edges.
+* `(fill-rect style region &optional rect char)` applies `style` to the region (relative to `rect`) and fills with a character if provided.
+
+These functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and optionally accept an immutable `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported.
+```lisp
+(defstruct (style (:conc-name nil) (:copier nil))
+  (fg nil :type (or null (integer #x000000 #xffffff)) :read-only t)
+  (bg nil :type (or null (integer #x000000 #xffffff)) :read-only t)
+  (boldp nil :type boolean :read-only t)
+  (italicp nil :type boolean :read-only t)
+  (reversep nil :type boolean :read-only t)
+  (underlinep nil :type boolean :read-only t))
+```
 The main function looks like this.
 If you are using the remote server trick mentioned previously, be sure to start the terminal thread in a separate thread
 to avoid slime redirecting output to the REPL, which cannot process terminal escape sequences.

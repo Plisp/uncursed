@@ -121,7 +121,7 @@
 
            #:put
            #:puts
-           #:put-style
+           #:fill-rect
            ;; errors
            #:rect-bounds-error
            #:rect-bounds-error

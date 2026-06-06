@@ -15,9 +15,17 @@
              :rows (or rows (rect-rows rect))
              :cols (or cols (rect-cols rect))))
 
-(defstruct (cell (:conc-name cell-))
+(defstruct (cell (:conc-name cell-)
+                 (:copier nil))
   (style *default-style* :type style)
   (string (string #\space) :type simple-string))
+
+(defun copy-cell (cell)
+  (let* ((len (length (cell-string cell)))
+         (s (make-array len :element-type 'character)))
+    (dotimes (i len)
+      (setf (schar s i) (schar (cell-string cell) i)))
+    (make-cell :style (cell-style cell) :string s)))
 
 (defmethod print-object ((cell cell) stream)
   (format stream "#<cell string:~a>" (cell-string cell)))
@@ -28,12 +36,12 @@
                 (the simple-string (cell-string cell2)))))
 
 (defun wide-cell-p (cell)
-  (loop for c across (cell-string cell)
-        for width = 0 then (+ width (character-width c))
-        do (when (> width 1)
-             (return t))))
+  (loop :for c :across (cell-string cell)
+        :for width = 0 :then (+ width (character-width c))
+        :do (when (> width 1)
+              (return t))))
 
-(deftype buffer () '(array cell))
+(deftype buffer () '(array cell)) ; TODO use one-dimensional simple-array
 
 ;;; loop API
 
@@ -108,28 +116,29 @@ May only be called from within the dynamic-extent of a call to `run'."))
   (:documentation "Signaled if an attempt is made to overwrite the middle cells of
 a wide character."))
 
-;; note that triple-width is rare enough (e.g. three-em-dash) and terminal support is
-;; so lacking that there's no point supporting it
-(defun put (char line col &optional rect style (put-buffer *put-buffer*))
-  (or put-buffer (error "PUT-BUFFER not provided"))
-  #-sbcl (check-type put-buffer buffer)
-  (check-type rect rect)
+;; triple-width is rare enough (e.g. three-em-dash) and terminal support is so lacking
+;; that no special handling is implemented
+(defun put (char line col rect &optional style (buffer *put-buffer*))
+  (or buffer (error "BUFFER not provided"))
+  #-sbcl (check-type buffer buffer)
+  (check-type rect (or rect null))
   (check-type char character)
   (check-type style (or style null))
   (let ((width (character-width char)))
-    (or (<= 1 line (rect-rows rect))
+    (or (<= 1 line (min (rect-rows rect) (- (array-dimension buffer 0) (rect-y rect))))
         (error 'rect-bounds-error
                :coordinate line
                :bounds :line
                :rect rect))
-    (or (<= 1 col (- (rect-cols rect) (max 0 (1- width))))
+    (or (<= 1 col (min (- (rect-cols rect) (max 0 (1- width)))
+                       (- (array-dimension buffer 1) (rect-x rect))))
         (error 'rect-bounds-error
                :coordinate col
                :bounds :column
                :rect rect))
     (let* ((cell-y (+ (rect-y rect) (1- line)))
            (cell-x (+ (rect-x rect) (1- col)))
-           (cell (aref put-buffer cell-y cell-x)))
+           (cell (aref buffer cell-y cell-x)))
       (if (zerop width) ; this should not be common
           (let* ((string (cell-string cell))
                  (old-length (length string)))
@@ -139,13 +148,13 @@ a wide character."))
             ;; clear previous wide character (if applicable)
             ;; [old][""] -> [" "][new]
             (unless (zerop cell-x)
-              (let ((prev (aref put-buffer cell-y (1- cell-x))))
+              (let ((prev (aref buffer cell-y (1- cell-x))))
                 (when (wide-cell-p prev)
                   (restart-case
                       (error 'wide-char-overwrite-error
                              :y cell-y
                              :x (1- cell-x)
-                             :buffer put-buffer)
+                             :buffer buffer)
                     (overwrite-char ()
                       :report "Overwrite the wide character"
                       (setf (cell-string prev) (string #\space)))
@@ -154,18 +163,18 @@ a wide character."))
                       (return-from put))))))
             ;; width > 1: clear next character (we checked for room above)
             (when (> width 1)
-              (let ((next (aref put-buffer cell-y (1+ cell-x))))
+              (let ((next (aref buffer cell-y (1+ cell-x))))
                 (when (wide-cell-p next)
                   (restart-case
                       (error 'wide-char-overwrite-error
                              :y cell-y
                              :x (1+ cell-x)
-                             :buffer put-buffer)
+                             :buffer buffer)
                     ;; turn the next-next character into a space if the next was wide
                     ;; [.][old][""] -> [new][""][ ] erases old character
                     (overwrite-char ()
                       :report "Overwrite the wide character"
-                      (setf (cell-string (aref put-buffer cell-y (+ 2 cell-x)))
+                      (setf (cell-string (aref buffer cell-y (+ 2 cell-x)))
                             (string #\space)))
                     (ignore-put ()
                       :report "Do nothing"
@@ -176,103 +185,110 @@ a wide character."))
             (and style (setf (cell-style cell) style)))))
     width))
 
-(defun puts (string line col rect &optional style (put-buffer *put-buffer*))
+(defun puts (string line col rect &optional style (buffer *put-buffer*))
+  "Truncates the string by default, but signals rect-bounds-error."
   (check-type rect rect)
   (check-type string string)
   (check-type style (or style null))
-  (let ((rect (rect rect))
-        (string-display-width (display-width string))
+  (let ((string-display-width (display-width string))
         (last-non-combining-char-pos (position-if-not #'zerop string
                                                       :key #'character-width
-                                                      :from-end t)))
-    (or (<= 1 line (rect-rows rect))
-        (error 'rect-bounds-error
-               :coordinate line
-               :bounds :line
-               :rect rect))
-    (or (plusp col)
-        (error 'rect-bounds-error
-               :coordinate col
-               :bounds :column
-               :rect rect))
-    (or (<= (+ (1- col) string-display-width) (rect-cols rect))
-        (error 'rect-bounds-error
-               :coordinate (+ (1- col) string-display-width)
-               :bounds :column
-               :rect rect))
-    (if last-non-combining-char-pos
-        (let* ((last-non-combining-char (char string last-non-combining-char-pos))
-               (last-non-combining-char-visual-offset
-                 (reduce #'+ string :key #'character-width
-                                    :end last-non-combining-char-pos))
-               (first-non-combining-char-pos
-                 (position-if-not #'zerop string :key #'character-width))
-               (first-non-combining-char (char string first-non-combining-char-pos))
-               (first-cell-y (+ (rect-y rect) (1- line)))
-               (first-cell-x (+ (rect-x rect) (1- col)))
-               (first-cell (aref put-buffer first-cell-y first-cell-x))
-               first-to-overwrite)
-          ;; signal overwrite error for first character early, *not writing to the buffer*
-          (unless (zerop first-cell-x)
-            (let ((prev (aref put-buffer first-cell-y (1- first-cell-x))))
-              (when (wide-cell-p prev)
-                (restart-case
-                    (error 'wide-char-overwrite-error
-                           :y first-cell-y
-                           :x (1- first-cell-x)
-                           :buffer put-buffer)
-                  (overwrite-char ()
-                    :report "Overwrite the wide character"
-                    (setf first-to-overwrite prev))
-                  (ignore-put ()
-                    :report "Do nothing"
-                    (return-from puts))))))
-          ;; now attempt to put, allowing writing to the buffer since we've treated the
-          ;; first char this may overwrite after the end of the string
-          (or (put last-non-combining-char
-                   line (+ col last-non-combining-char-visual-offset)
-                   style
-                   rect put-buffer)
-              ;; if IGNORE-PUT restart selected, abort here, before anything is written
-              (return-from puts))
-          ;; write first character after we've ascertained that the caller doesn't want to
-          ;; abort via IGNORE-PUT. Also perform overwrite for first char if overwrite-char
-          ;; was selected earlier
-          (unless (= first-non-combining-char-pos last-non-combining-char-pos)
-            (setf (cell-string first-cell) (string first-non-combining-char))
-            (and style (setf (cell-style first-cell) style))
-            (when first-to-overwrite
-              (setf (cell-string first-to-overwrite) (string #\space))))
-          ;; put the rest normally, overwriting any previous contents unconditionally
-          ;; leading combining characters are *discarded* (probably reasonable)
-          (loop :with put-col = col
-                :with last-width = (character-width first-non-combining-char)
-                :for i :from (1+ first-non-combining-char-pos)
-                  :below last-non-combining-char-pos
-                :for char = (char string i)
-                :do (let ((width (character-width char)))
-                      (when (plusp width)
-                        (incf put-col last-width)
-                        (setf last-width width)))
-                    (handler-bind ((wide-char-overwrite-error
-                                     (lambda (e)
-                                       (declare (ignore e))
-                                       (invoke-restart 'overwrite-char))))
-                      (put char line put-col style rect)))
-          ;; write trailing combining characters
-          (loop :for i :from (1+ last-non-combining-char-pos) :below (length string)
-                :do (put (char string i)
-                         line (+ col last-non-combining-char-visual-offset)
-                         style
-                         rect)))
-        ;; all combining characters, all fit at the index
-        (loop :for char :across string
-              :do (put char line col style rect)))
-    string-display-width))
+                                                      :from-end t))
+        (first-cell-x (+ (rect-x rect) (1- col))))
+    (or (<= 1 line (min (rect-rows rect) (- (array-dimension buffer 0) (rect-y rect))))
+        (signal 'rect-bounds-error
+                :coordinate line
+                :bounds :line
+                :rect rect))
+    (or (<= 1 col)
+        (signal 'rect-bounds-error
+                :coordinate col
+                :bounds :column
+                :rect rect))
+    (or (<= (+ (1- col) string-display-width)
+            (min (rect-cols rect)
+                 (- (array-dimension buffer 1) (rect-x rect))))
+        (signal 'rect-bounds-error
+                :coordinate (+ (1- col) string-display-width)
+                :bounds :column
+                :rect rect))
+    ;; nothing to do
+    (unless (< first-cell-x (array-dimension buffer 1))
+      (return-from puts))
+    ;;
+    (flet ((put* (char line col)
+             (handler-case
+                 (put char line col rect style buffer)
+               (rect-bounds-error ()
+                 (return-from puts)))))
+      (if last-non-combining-char-pos
+          (let* ((last-non-combining-char (char string last-non-combining-char-pos))
+                 (last-non-combining-char-visual-offset
+                   (reduce #'+ string :key #'character-width
+                                      :end last-non-combining-char-pos))
+                 (first-non-combining-char-pos
+                   (position-if-not #'zerop string :key #'character-width))
+                 (first-non-combining-char (char string first-non-combining-char-pos))
+                 (first-cell-y (+ (rect-y rect) (1- line)))
+                 (first-cell (aref buffer first-cell-y first-cell-x))
+                 first-to-overwrite)
+            ;; signal overwrite error for first character early, *not writing to the buffer*
+            (unless (zerop first-cell-x)
+              (let ((prev (aref buffer first-cell-y (1- first-cell-x))))
+                (when (wide-cell-p prev)
+                  (restart-case
+                      (error 'wide-char-overwrite-error
+                             :y first-cell-y
+                             :x (1- first-cell-x)
+                             :buffer buffer)
+                    (overwrite-char ()
+                      :report "Overwrite the wide character"
+                      (setf first-to-overwrite prev))
+                    (ignore-put ()
+                      :report "Do nothing"
+                      (return-from puts))))))
+            ;; this may overwrite after the end of the string, so we check it before writing
+            ;; the rest. Note the bounds check for correct truncation behavior
+            (let ((lastcol (+ col last-non-combining-char-visual-offset)))
+              (when (< (+ (rect-x rect) (1- lastcol)) (array-dimension buffer 1))
+                (or (put last-non-combining-char line lastcol rect style buffer)
+                    ;; if IGNORE-PUT restart selected, abort here, before anything is written
+                    (return-from puts))))
+            ;; write first character after we've ascertained that the caller doesn't want to
+            ;; abort via IGNORE-PUT. Also perform overwrite for first char if overwrite-char
+            ;; was selected earlier
+            (unless (= first-non-combining-char-pos last-non-combining-char-pos)
+              (setf (cell-string first-cell) (string first-non-combining-char))
+              (and style (setf (cell-style first-cell) style))
+              (when first-to-overwrite
+                (setf (cell-string first-to-overwrite) (string #\space))))
+            ;; put the rest normally, overwriting any previous contents unconditionally
+            ;; leading combining characters are *discarded* (probably reasonable)
+            (loop :with put-col = col
+                  :with last-width = (character-width first-non-combining-char)
+                  :for i :from (1+ first-non-combining-char-pos)
+                    :below last-non-combining-char-pos
+                  :for char = (char string i)
+                  :do (let ((width (character-width char)))
+                        (when (plusp width)
+                          (incf put-col last-width)
+                          (setf last-width width)))
+                      (handler-bind ((wide-char-overwrite-error
+                                       (lambda (e)
+                                         (declare (ignore e))
+                                         (invoke-restart 'overwrite-char))))
+                        (put* char line put-col)))
+            ;; write trailing combining characters
+            (loop :for i :from (1+ last-non-combining-char-pos) :below (length string)
+                  :do (put* (char string i)
+                            line (+ col last-non-combining-char-visual-offset))))
+          ;; all combining characters, all fit at the index
+          (loop :for char :across string
+                :do (put* char line col))))))
 
-(defun put-style (style region &optional rect (put-buffer *put-buffer*))
-  (or put-buffer (error "PUT-BUFFER not provided"))
-  #-sbcl (check-type put-buffer buffer)
+(defun fill-rect (style region rect &optional char (buffer *put-buffer*))
+  (or buffer (error "BUFFER not provided"))
+  #-sbcl (check-type buffer buffer)
   (check-type region rect)
   (check-type rect rect)
   (check-type style style)
@@ -300,7 +316,9 @@ a wide character."))
         :for y :from (+ (rect-y rect) (rect-y region))
         :do (loop :repeat (rect-cols region)
                   :for x :from (+ (rect-x rect) (rect-x region))
-                  :do (setf (cell-style (aref put-buffer y x)) style))))
+                  :do (setf (cell-style (aref buffer y x)) style)
+                      (when char
+                        (setf (cell-string (aref buffer y x)) (string char))))))
 
 (defun buffer-diff (old new)
   (assert (= (array-total-size old) (array-total-size new)))
@@ -312,7 +330,7 @@ a wide character."))
         :for ocell = (row-major-aref old idx)
         :for ncell = (row-major-aref new idx)
         :do (when (cell/= ocell ncell)
-              (vector-push-extend (list* ncell y x) diff))
+              (vector-push-extend (list* ncell y x) diff)) ; TODO use structure
         :finally (return diff)))
 
 (defun clear-buffer (buffer)
