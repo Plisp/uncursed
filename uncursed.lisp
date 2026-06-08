@@ -4,16 +4,21 @@
 
 (defstruct (rect (:conc-name rect-)
                  (:copier nil))
-  (x (error "rect X not provided") :type fixnum :read-only t)
-  (y (error "rect Y not provided") :type fixnum :read-only t)
-  (rows (error "rect ROWS not provided") :type fixnum :read-only t)
-  (cols (error "rect COLS not provided") :type fixnum :read-only t))
+  (x (error "rect X not provided") :type (unsigned-byte 32) :read-only t)
+  (y (error "rect Y not provided") :type (unsigned-byte 32) :read-only t)
+  (rows (error "rect ROWS not provided") :type (unsigned-byte 32) :read-only t)
+  (cols (error "rect COLS not provided") :type (unsigned-byte 32) :read-only t))
 
 (defun copy-rect (rect &key x y rows cols)
   (make-rect :x (or x (rect-x rect))
              :y (or y (rect-y rect))
              :rows (or rows (rect-rows rect))
              :cols (or cols (rect-cols rect))))
+
+(defun mouse-within (data rect)
+  "Returns true iff the mouse-data `data' is in `rect'"
+  (and (<= (1+ (rect-y rect)) (mouse-data-row data) (+ (rect-y rect) (rect-rows rect)))
+       (<= (1+ (rect-x rect)) (mouse-data-col data) (+ (rect-x rect) (rect-cols rect)))))
 
 (defstruct (cell (:conc-name cell-)
                  (:copier nil))
@@ -292,20 +297,10 @@ a wide character."))
   (check-type region rect)
   (check-type rect rect)
   (check-type style style)
-  (or (<= 0 (rect-y region))
-      (error 'rect-bounds-error
-             :coordinate (rect-y region)
-             :bounds :line
-             :rect rect))
   (or (<= (+ (rect-y region) (rect-rows region)) (rect-rows rect))
       (error 'rect-bounds-error
              :coordinate (+ (rect-y region) (rect-rows region))
              :bounds :line
-             :rect rect))
-  (or (<= 0 (rect-x region))
-      (error 'rect-bounds-error
-             :coordinate (rect-x region)
-             :bounds :column
              :rect rect))
   (or (<= (+ (rect-x region) (rect-cols region)) (rect-cols rect))
       (error 'rect-bounds-error
@@ -320,6 +315,11 @@ a wide character."))
                       (when char
                         (setf (cell-string (aref buffer y x)) (string char))))))
 
+(defstruct patch
+  (cell (error "no diff cell") :type (or null cell))
+  (y (error "no diff y") :type (unsigned-byte 32))
+  (x (error "no diff x") :type (unsigned-byte 32)))
+
 (defun buffer-diff (old new)
   (assert (= (array-total-size old) (array-total-size new)))
   (loop :with diff = (make-array 0 :fill-pointer t :adjustable t)
@@ -330,7 +330,7 @@ a wide character."))
         :for ocell = (row-major-aref old idx)
         :for ncell = (row-major-aref new idx)
         :do (when (cell/= ocell ncell)
-              (vector-push-extend (list* ncell y x) diff)) ; TODO use structure
+              (vector-push-extend (make-patch :cell ncell :y y :x x) diff))
         :finally (return diff)))
 
 (defun clear-buffer (buffer)
@@ -384,19 +384,21 @@ a wide character."))
     (sys:set-style *default-style* (use-palette tui))
     (loop :with diff = (buffer-diff screen canvas)
           :with current-style = *default-style*
-          :with last-pos
-          :with last-width
-          :for (cell . pos) :across diff
-          :do (let ((cell-width (display-width (cell-string cell))))
-                (or (and last-width last-pos
-                         (= (car pos) (car last-pos))
-                         (= (cdr pos) (+ (cdr last-pos) last-width)))
-                    (sys:set-cursor-position (car pos) (cdr pos)))
-                (sys:set-style-from-old current-style (cell-style cell) (use-palette tui))
-                (setf current-style (cell-style cell))
-                (write-string (cell-string cell))
-                (setf last-pos pos
-                      last-width cell-width)))
+          :for patch :across diff
+          :for last-x = nil :then x
+          :for last-y = nil :then y
+          :for last-width = nil :then cell-width
+          :for cell = (patch-cell patch)
+          :for x = (patch-x patch)
+          :for y = (patch-y patch)
+          :for cell-width = (display-width (cell-string cell))
+          :do (or (and last-width ; last-x last-y
+                       (= y last-y)
+                       (= x (+ last-x last-width)))
+                  (sys:set-cursor-position y x))
+              (sys:set-style-from-old current-style (cell-style cell) (use-palette tui))
+              (setf current-style (cell-style cell))
+              (write-string (cell-string cell)))
     ;; swap buffers
     (rotatef screen canvas)))
 

@@ -99,6 +99,8 @@
            #:rect
            #:make-rect #:copy-rect
            #:rect-x #:rect-y #:rect-rows #:rect-cols
+           #:clamp
+           #:mouse-within
 
            #:make-timer
            ;; methods
@@ -132,4 +134,13 @@
            ;; restarts
            #:overwrite-char
            #:ignore-put
+
+           ;; elemental
+           #:elemental
+           #:view
+           #:children #:focused #:key-handler #:mouse-handler
+           #:render
+           #:render-state
+           #:root-view
+           #:horizontal-container #:vertical-container
            ))
