@@ -131,7 +131,7 @@
          ;; allocate expansion space backwards, while shifting cells forwards
          ;; using fill-rect to fill in the gaps according to child-bgs
          (loop :for view :in children
-               :for expansion = (pop expansions)
+               :for expansion = (or (pop expansions) (loop-finish))
                :for fill-bg :in child-bgs
                :for old = (rect view)
                :for old-cols = (funcall span (rect view))
