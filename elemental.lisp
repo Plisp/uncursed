@@ -41,6 +41,7 @@
 ;;; event dispatching
 (defclass elemental (tui)
   ((%root-view :initarg :root-view
+               :initform nil
                :reader root-view
                :type (or null view))))
 
@@ -66,8 +67,8 @@
       (view-traverse (root-view tui)
                      (lambda (view)
                        (when (focused view)
-                         (funcall (key-handler view) view event)
-                         t)))))
+                         (funcall (key-handler view) view event))
+                       t))))
 
 ;;
 ;;; containers

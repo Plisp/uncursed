@@ -46,6 +46,17 @@
         :do (when (> width 1)
               (return t))))
 
+(defun copy-style-from (style old)
+  (flet ((default (accessor)
+           (let ((provided (funcall accessor style)))
+             (if provided provided (funcall accessor old)))))
+    (make-style :bg (default #'bg)
+                :fg (default #'fg)
+                :boldp (default #'boldp)
+                :italicp (default #'italicp)
+                :reversep (default #'reversep)
+                :underlinep (default #'underlinep))))
+
 (deftype buffer () '(array cell)) ; TODO use one-dimensional simple-array
 
 ;;; loop API
@@ -187,7 +198,7 @@ a wide character."))
                 (setf (cell-string next) (make-string 0))))
             ;; finally write the character into its cell
             (setf (cell-string cell) (string char))
-            (and style (setf (cell-style cell) style)))))
+            (and style (setf (cell-style cell) (copy-style-from style (cell-style cell)))))))
     width))
 
 (defun puts (string line col rect &optional style (buffer *put-buffer*))
@@ -264,7 +275,8 @@ a wide character."))
             ;; was selected earlier
             (unless (= first-non-combining-char-pos last-non-combining-char-pos)
               (setf (cell-string first-cell) (string first-non-combining-char))
-              (and style (setf (cell-style first-cell) style))
+              (and style (setf (cell-style first-cell)
+                               (copy-style-from style (cell-style first-cell))))
               (when first-to-overwrite
                 (setf (cell-string first-to-overwrite) (string #\space))))
             ;; put the rest normally, overwriting any previous contents unconditionally
@@ -311,9 +323,10 @@ a wide character."))
         :for y :from (+ (rect-y rect) (rect-y region))
         :do (loop :repeat (rect-cols region)
                   :for x :from (+ (rect-x rect) (rect-x region))
-                  :do (setf (cell-style (aref buffer y x)) style)
+                  :for cell = (aref buffer y x)
+                  :do (setf (cell-style cell) (copy-style-from style (cell-style cell)))
                       (when char
-                        (setf (cell-string (aref buffer y x)) (string char))))))
+                        (setf (cell-string cell) (string char))))))
 
 (defstruct patch
   (cell (error "no diff cell") :type (or null cell))
