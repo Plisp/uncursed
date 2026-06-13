@@ -9,7 +9,19 @@
   (rows (error "rect ROWS not provided") :type (unsigned-byte 32) :read-only t)
   (cols (error "rect COLS not provided") :type (unsigned-byte 32) :read-only t))
 
+(declaim (inline rect-x2))
+(defun rect-x2 (rect)
+  (declare (optimize speed))
+  (+ (rect-x rect) (rect-cols rect)))
+
+(declaim (inline rect-y2))
+(defun rect-y2 (rect)
+  (declare (optimize speed))
+  (+ (rect-y rect) (rect-rows rect)))
+
+(declaim (inline copy-rect))
 (defun copy-rect (rect &key x y rows cols)
+  (declare (optimize speed))
   (make-rect :x (or x (rect-x rect))
              :y (or y (rect-y rect))
              :rows (or rows (rect-rows rect))
@@ -17,8 +29,8 @@
 
 (defun mouse-within (data rect)
   "Returns true iff the mouse-data `data' is in `rect'"
-  (and (<= (1+ (rect-y rect)) (mouse-data-row data) (+ (rect-y rect) (rect-rows rect)))
-       (<= (1+ (rect-x rect)) (mouse-data-col data) (+ (rect-x rect) (rect-cols rect)))))
+  (and (<= (1+ (rect-y rect)) (mouse-data-row data) (rect-y2 rect))
+       (<= (1+ (rect-x rect)) (mouse-data-col data) (rect-x2 rect))))
 
 (defstruct (cell (:conc-name cell-)
                  (:copier nil))
@@ -26,10 +38,11 @@
   (string (string #\space) :type simple-string))
 
 (defun copy-cell (cell)
-  (let* ((len (length (cell-string cell)))
+  (let* ((cell-string (cell-string cell))
+         (len (length cell-string))
          (s (make-array len :element-type 'character)))
     (dotimes (i len)
-      (setf (schar s i) (schar (cell-string cell) i)))
+      (setf (schar s i) (schar cell-string i)))
     (make-cell :style (cell-style cell) :string s)))
 
 (defmethod print-object ((cell cell) stream)
@@ -309,14 +322,14 @@ a wide character."))
   (check-type region rect)
   (check-type rect rect)
   (check-type style style)
-  (or (<= (+ (rect-y region) (rect-rows region)) (rect-rows rect))
+  (or (<= (rect-y2 region) (rect-rows rect))
       (error 'rect-bounds-error
-             :coordinate (+ (rect-y region) (rect-rows region))
+             :coordinate (rect-y2 region)
              :bounds :line
              :rect rect))
-  (or (<= (+ (rect-x region) (rect-cols region)) (rect-cols rect))
+  (or (<= (rect-x2 region) (rect-cols rect))
       (error 'rect-bounds-error
-             :coordinate (+ (rect-x region) (rect-cols region))
+             :coordinate (rect-x2 region)
              :bounds :column
              :rect rect))
   (loop :repeat (rect-rows region)

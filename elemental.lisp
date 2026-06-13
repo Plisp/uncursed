@@ -77,10 +77,8 @@
 (defun clamp-rect (rect to)
   (let* ((x1 (max (rect-x rect) (rect-x to)))
          (y1 (max (rect-y rect) (rect-y to)))
-         (x2 (min (+ (rect-x rect) (rect-cols rect))
-                  (+ (rect-x to) (rect-cols to))))
-         (y2 (min (+ (rect-y rect) (rect-rows rect))
-                  (+ (rect-y to) (rect-rows to)))))
+         (x2 (min (rect-x2 rect) (rect-x2 to)))
+         (y2 (min (rect-y2 rect) (rect-y2 to))))
     (copy-rect rect :x x1 :y y1 :cols (max 0 (- x2 x1)) :rows (max 0 (- y2 y1)))))
 
 ;; currently if two alike containers are spread along the same axis, the first one
@@ -158,14 +156,14 @@
        (loop
          :for x-offset :downfrom (1- (rect-cols src)) :to 0
          :do (loop
-               :for y :from (rect-y src) :below (+ (rect-y src) (rect-rows src))
+               :for y :from (rect-y src) :below (rect-y2 src)
                :do (setf (aref *put-buffer* y (+ (rect-x dest) x-offset))
                          (copy-cell (aref *put-buffer* y (+ (rect-x src) x-offset)))))))
      (col-backwards-blit (src dest)
        (loop
          :for y-offset :downfrom (1- (rect-rows src)) :to 0
          :do (loop
-               :for x :from (rect-x src) :below (+ (rect-x src) (rect-cols src))
+               :for x :from (rect-x src) :below (rect-x2 src)
                :do (setf (aref *put-buffer* (+ (rect-y dest) y-offset) x)
                          (copy-cell (aref *put-buffer* (+ (rect-y src) y-offset) x)))))))
 

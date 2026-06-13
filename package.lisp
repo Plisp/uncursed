@@ -99,7 +99,8 @@
            #:rect
            #:make-rect #:copy-rect
            #:rect-x #:rect-y #:rect-rows #:rect-cols
-           #:clamp
+           #:rect-x2 #:rect-y2
+           #:clamp-rect
            #:mouse-within
 
            #:make-timer
