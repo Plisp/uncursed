@@ -145,6 +145,23 @@ May only be called from within the dynamic-extent of a call to `run'."))
   (:documentation "Signaled if an attempt is made to overwrite the middle cells of
 a wide character."))
 
+(defun clamp-rect (rect to)
+  (let* ((x1 (max (rect-x rect) (rect-x to)))
+         (y1 (max (rect-y rect) (rect-y to)))
+         (x2 (min (rect-x2 rect) (rect-x2 to)))
+         (y2 (min (rect-y2 rect) (rect-y2 to))))
+    (copy-rect rect :x x1 :y y1 :cols (max 0 (- x2 x1)) :rows (max 0 (- y2 y1)))))
+
+(declaim (inline screen-rect))
+(defun screen-rect ()
+  (make-rect :x 0 :y 0
+             :rows (array-dimension *put-buffer* 0)
+             :cols (array-dimension *put-buffer* 1)))
+
+(declaim (inline clamp-rect-to-screen))
+(defun clamp-rect-to-screen (rect)
+  (setf rect (clamp-rect rect (screen-rect))))
+
 ;; triple-width is rare enough (e.g. three-em-dash) and terminal support is so lacking
 ;; that no special handling is implemented
 (defun put (char line col rect &optional style (buffer *put-buffer*))
@@ -158,13 +175,13 @@ a wide character."))
         (error 'rect-bounds-error
                :coordinate line
                :bounds :line
-               :rect rect))
+               :rect (clamp-rect-to-screen rect)))
     (or (<= 1 col (min (- (rect-cols rect) (max 0 (1- width)))
                        (- (array-dimension buffer 1) (rect-x rect))))
         (error 'rect-bounds-error
                :coordinate col
                :bounds :column
-               :rect rect))
+               :rect (clamp-rect-to-screen rect)))
     (let* ((cell-y (+ (rect-y rect) (1- line)))
            (cell-x (+ (rect-x rect) (1- col)))
            (cell (aref buffer cell-y cell-x)))
@@ -228,7 +245,7 @@ a wide character."))
         (signal 'rect-bounds-error
                 :coordinate line
                 :bounds :line
-                :rect rect))
+                :rect (clamp-rect-to-screen rect)))
     (or (<= 1 col)
         (signal 'rect-bounds-error
                 :coordinate col
@@ -240,7 +257,7 @@ a wide character."))
         (signal 'rect-bounds-error
                 :coordinate (+ (1- col) string-display-width)
                 :bounds :column
-                :rect rect))
+                :rect (clamp-rect-to-screen rect)))
     ;; nothing to do
     (unless (< first-cell-x (array-dimension buffer 1))
       (return-from puts))
@@ -317,21 +334,23 @@ a wide character."))
                 :do (put* char line col))))))
 
 (defun fill-rect (style region rect &optional char (buffer *put-buffer*))
+  "Clamps rect to the screen dimensions by default."
   (or buffer (error "BUFFER not provided"))
   #-sbcl (check-type buffer buffer)
   (check-type region rect)
   (check-type rect rect)
   (check-type style style)
-  (or (<= (rect-y2 region) (rect-rows rect))
+  (or (<= (rect-y2 region) (min (rect-rows rect) (array-dimension buffer 0)))
       (error 'rect-bounds-error
              :coordinate (rect-y2 region)
              :bounds :line
-             :rect rect))
-  (or (<= (rect-x2 region) (rect-cols rect))
+             :rect (clamp-rect-to-screen rect)))
+  (or (<= (rect-x2 region) (min (rect-cols rect) (array-dimension buffer 1)))
       (error 'rect-bounds-error
              :coordinate (rect-x2 region)
              :bounds :column
-             :rect rect))
+             :rect (clamp-rect-to-screen rect)))
+  ;;
   (loop :repeat (rect-rows region)
         :for y :from (+ (rect-y rect) (rect-y region))
         :do (loop :repeat (rect-cols region)

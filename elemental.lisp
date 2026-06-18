@@ -74,13 +74,6 @@
 ;;; containers
 ;;
 
-(defun clamp-rect (rect to)
-  (let* ((x1 (max (rect-x rect) (rect-x to)))
-         (y1 (max (rect-y rect) (rect-y to)))
-         (x2 (min (rect-x2 rect) (rect-x2 to)))
-         (y2 (min (rect-y2 rect) (rect-y2 to))))
-    (copy-rect rect :x x1 :y y1 :cols (max 0 (- x2 x1)) :rows (max 0 (- y2 y1)))))
-
 ;; currently if two alike containers are spread along the same axis, the first one
 ;; will be allowed to allocate all the space.
 ;; Shrinking may trigger arbitrary reallocations of children which significantly
@@ -97,6 +90,21 @@
              (growth-factors (list))
              (expansions (list))
              noalloc)
+         (or (<= (rect-y2 rect) (array-dimension *put-buffer* 0))
+             (error 'rect-bounds-error
+                    :coordinate (rect-y2 rect)
+                    :bounds :line
+                    :rect (screen-rect)))
+         (or (<= (rect-x2 rect) (array-dimension *put-buffer* 1))
+             (error 'rect-bounds-error
+                    :coordinate (rect-x2 rect)
+                    :bounds :column
+                    :rect (screen-rect)))
+         (or ())
+         (setf rect
+               (clamp-rect rect (make-rect :x 0 :y 0
+                                           :rows (array-dimension *put-buffer* 0)
+                                           :cols (array-dimension *put-buffer* 1))))
          (loop
            :for thing :in renderables
            :do (multiple-value-bind (view grow fill-bg)
@@ -114,7 +122,7 @@
                  (push fill-bg child-bgs)
                  (push view children)))
          ;; growth-factors to cells, first gets rest
-         (let ((free-cols (- rect-x2 (funcall coord child-rect))) ; clamped
+         (let ((free-cols (- rect-x2 (funcall coord child-rect))) ; clamped, >= 0
                (total-factor (reduce #'+ growth-factors)))
            ;; we can be space conservative if nobody wants to expand
            (if (= 0 total-factor)
@@ -122,7 +130,7 @@
                (loop :for allocated = 0 :then (+ allocated allocation)
                      :for w :in growth-factors
                      :for allocation = (if (zerop w)
-                                           0
+                                           0 ; assuming factors >= 0, this is non-negative
                                            (truncate free-cols (/ total-factor w)))
                      :do (push allocation expansions)
                      :finally (incf (car expansions) (- free-cols allocated))
@@ -157,6 +165,7 @@
          :for x-offset :downfrom (1- (rect-cols src)) :to 0
          :do (loop
                :for y :from (rect-y src) :below (rect-y2 src)
+               ;; dest.x+src.cols <= dest.x+dest.cols <= x bound
                :do (setf (aref *put-buffer* y (+ (rect-x dest) x-offset))
                          (copy-cell (aref *put-buffer* y (+ (rect-x src) x-offset)))))))
      (col-backwards-blit (src dest)
@@ -169,7 +178,7 @@
 
   (defun horizontal-container (rect renderables)
     "The `rect' argument indicates the maximum bounds for this container, which may
-not be reached unless the last child element is has positive grow factor.
+not be reached unless the last child element has positive grow factor.
 `render' takes a (thing,rect) -> (values view grow &optional fill-bg)
 `view''s rect should bound the area drawn to the buffer, and is clamped to `rect'.
 `grow' is a non-negative integer indicating the *proportion* of free space to expand.
@@ -181,7 +190,7 @@ If it is zero, no expansion occurs."
 
   (defun vertical-container (rect renderables)
     "The `rect' argument indicates the maximum bounds for this container, which may
-not be reached unless the last child element is has positive grow factor.
+not be reached unless the last child element has positive grow factor.
 `view''s rect should bound the area drawn to the buffer, and is clamped to `rect'.
 `grow' is a non-negative integer indicating the *proportion* of free space to expand.
 If it is zero, no expansion occurs."
