@@ -206,9 +206,9 @@
                                             (continue ()
                                               :report "Continue from tick error"
                                               *tick*)))))
-    (tui:run tui :redisplay-on-input nil)
-    #+sbcl
-    (sb-concurrency:send-message *log* :stop)))
+    (unwind-protect (tui:run tui :redisplay-on-input nil)
+      #+sbcl
+      (sb-concurrency:send-message *log* :stop))))
 
 (defun main ()
   (if (member :slynk *features*)

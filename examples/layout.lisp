@@ -76,9 +76,9 @@
                       (horizontal (make-instance 'display :string "show")
                                   (make-instance 'display :string "dimensions"))))))
     (setf *tui* tui)
-    (tui:run tui :redisplay-on-input t :mouse :hover)
-    #+sbcl
-    (sb-concurrency:send-message *log* :stop)))
+    (unwind-protect (tui:run tui :redisplay-on-input t :mouse :hover)
+      #+sbcl
+      (sb-concurrency:send-message *log* :stop))))
 
 (defmethod tui:dispatch-event :around ((ui ui) event)
   (with-simple-restart (nil "ignore event-handling error")
