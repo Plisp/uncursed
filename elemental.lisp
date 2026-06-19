@@ -156,7 +156,9 @@
                               (rect view) #\space))
          ;; take as little space as possible
          (make-instance 'view :rect (funcall copier2 rect
-                                             (when noalloc (funcall coord child-rect))
+                                             (when noalloc
+                                               (- (funcall coord child-rect)
+                                                  (funcall coord rect)))
                                              max-height)
                               :focused (some #'focused children)
                               :children children)))
