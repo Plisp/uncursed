@@ -62,12 +62,12 @@
       ;; mouse events are globally visible, necessary for patterns like click and hold
       (view-traverse (root-view tui)
                      (lambda (view)
-                       (funcall (mouse-handler view) view event)
+                       (funcall (mouse-handler view) event)
                        t))
       (view-traverse (root-view tui)
                      (lambda (view)
                        (when (focused view)
-                         (funcall (key-handler view) view event))
+                         (funcall (key-handler view) event))
                        t))))
 
 ;;
@@ -109,7 +109,7 @@
            :for thing :in renderables
            :do (multiple-value-bind (view grow fill-bg)
                    (render thing child-rect)
-                 (or view (loop-finish)) ; we've run out of space
+                 (or grow (setf grow 0))
                  (alexandria:maxf max-height (funcall other-span (rect view)))
                  (setf (rect view) (clamp-rect (rect view) rect))
                  ;; update x for the next invocation
