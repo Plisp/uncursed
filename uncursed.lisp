@@ -334,7 +334,7 @@ a wide character."))
                 :do (put* char line col))))))
 
 (defun fill-rect (style region rect &optional char (buffer *put-buffer*))
-  "Clamps rect to the screen dimensions by default."
+  "Fills the rect `region' relative to `rect' with the provided style."
   (or buffer (error "BUFFER not provided"))
   #-sbcl (check-type buffer buffer)
   (check-type region rect)

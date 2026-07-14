@@ -62,8 +62,8 @@
 (defmethod tui:render ((split vertical) rect)
   (values (tui:vertical-container rect (things split)) 1 #x3300aa))
 
-(defmethod tui:render-state ((ui ui))
-  (state ui))
+(defmethod tui:render ((ui ui) rect)
+  (render (state ui) rect))
 
 (defvar *tui*)
 

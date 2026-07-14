@@ -45,12 +45,9 @@
                :reader root-view
                :type (or null view))))
 
-(defmethod render-state ((tui elemental))
-  (error "provide the toplevel thing to be `render'd!"))
-
 (defmethod redisplay ((tui elemental))
   (setf (slot-value tui '%root-view)
-        (render (render-state tui) (make-rect :x 0 :y 0 :cols (cols tui) :rows (rows tui)))))
+        (render tui (make-rect :x 0 :y 0 :cols (cols tui) :rows (rows tui)))))
 
 (defun view-traverse (view callback)
   (let ((res (funcall callback view)))
@@ -62,12 +59,12 @@
       ;; mouse events are globally visible, necessary for patterns like click and hold
       (view-traverse (root-view tui)
                      (lambda (view)
-                       (funcall (mouse-handler view) event)
+                       (funcall (mouse-handler view) view event)
                        t))
       (view-traverse (root-view tui)
                      (lambda (view)
                        (when (focused view)
-                         (funcall (key-handler view) event))
+                         (funcall (key-handler view) view event))
                        t))))
 
 ;;
