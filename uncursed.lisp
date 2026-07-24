@@ -165,23 +165,19 @@ a wide character."))
 ;; triple-width is rare enough (e.g. three-em-dash) and terminal support is so lacking
 ;; that no special handling is implemented
 (defun put (char line col rect &optional style (buffer *put-buffer*))
-  (or buffer (error "BUFFER not provided"))
-  #-sbcl (check-type buffer buffer)
-  (check-type rect (or rect null))
-  (check-type char character)
   (check-type style (or style null))
   (let ((width (character-width char)))
-    (or (<= 1 line (min (rect-rows rect) (- (array-dimension buffer 0) (rect-y rect))))
+    (or (<= 1 line (min (rect-rows rect)
+                        (- (array-dimension buffer 0) (rect-y rect))))
         (error 'rect-bounds-error
-               :coordinate line
-               :bounds :line
+               :coordinate line :bounds :line
                :rect (clamp-rect-to-screen rect)))
     (or (<= 1 col (min (- (rect-cols rect) (max 0 (1- width)))
                        (- (array-dimension buffer 1) (rect-x rect))))
         (error 'rect-bounds-error
-               :coordinate col
-               :bounds :column
+               :coordinate col :bounds :column
                :rect (clamp-rect-to-screen rect)))
+    ;; drawing
     (let* ((cell-y (+ (rect-y rect) (1- line)))
            (cell-x (+ (rect-x rect) (1- col)))
            (cell (aref buffer cell-y cell-x)))
@@ -231,37 +227,26 @@ a wide character."))
             (and style (setf (cell-style cell) (copy-style-from style (cell-style cell)))))))
     width))
 
+;; default truncation is usually desired but annoying to implement for users who also want
+;; correct wide character handling. A wrapping routine can use this anyways
 (defun puts (string line col rect &optional style (buffer *put-buffer*))
-  "Truncates the string by default, but signals rect-bounds-error."
-  (check-type rect rect)
-  (check-type string string)
+  "Truncates the string by default, but produces a `rect-bounds-error' if
+the column is negative or the line is out of bounds."
   (check-type style (or style null))
-  (let ((string-display-width (display-width string))
-        (last-non-combining-char-pos (position-if-not #'zerop string
+  (let ((last-non-combining-char-pos (position-if-not #'zerop string
                                                       :key #'character-width
                                                       :from-end t))
         (first-cell-x (+ (rect-x rect) (1- col))))
     (or (<= 1 line (min (rect-rows rect) (- (array-dimension buffer 0) (rect-y rect))))
-        (signal 'rect-bounds-error
-                :coordinate line
-                :bounds :line
+        (error 'rect-bounds-error
+                :coordinate line :bounds :line
                 :rect (clamp-rect-to-screen rect)))
     (or (<= 1 col)
-        (signal 'rect-bounds-error
-                :coordinate col
-                :bounds :column
-                :rect rect))
-    (or (<= (+ (1- col) string-display-width)
-            (min (rect-cols rect)
-                 (- (array-dimension buffer 1) (rect-x rect))))
-        (signal 'rect-bounds-error
-                :coordinate (+ (1- col) string-display-width)
-                :bounds :column
-                :rect (clamp-rect-to-screen rect)))
+        (error 'rect-bounds-error :coordinate col :bounds :column :rect rect))
     ;; nothing to do
     (unless (< first-cell-x (array-dimension buffer 1))
       (return-from puts))
-    ;;
+    ;; this will silently capture column bounds errors
     (flet ((put* (char line col)
              (handler-case
                  (put char line col rect style buffer)
@@ -334,31 +319,19 @@ a wide character."))
                 :do (put* char line col))))))
 
 (defun fill-rect (style region rect &optional char (buffer *put-buffer*))
-  "Fills the rect `region' relative to `rect' with the provided style."
-  (or buffer (error "BUFFER not provided"))
-  #-sbcl (check-type buffer buffer)
-  (check-type region rect)
-  (check-type rect rect)
-  (check-type style style)
-  (or (<= (rect-y2 region) (min (rect-rows rect) (array-dimension buffer 0)))
-      (error 'rect-bounds-error
-             :coordinate (rect-y2 region)
-             :bounds :line
-             :rect (clamp-rect-to-screen rect)))
-  (or (<= (rect-x2 region) (min (rect-cols rect) (array-dimension buffer 1)))
-      (error 'rect-bounds-error
-             :coordinate (rect-x2 region)
-             :bounds :column
-             :rect (clamp-rect-to-screen rect)))
-  ;;
-  (loop :repeat (rect-rows region)
-        :for y :from (+ (rect-y rect) (rect-y region))
-        :do (loop :repeat (rect-cols region)
-                  :for x :from (+ (rect-x rect) (rect-x region))
-                  :for cell = (aref buffer y x)
-                  :do (setf (cell-style cell) (copy-style-from style (cell-style cell)))
-                      (when char
-                        (setf (cell-string cell) (string char))))))
+  "Fills the rect `region' relative to `rect' with the provided style.
+Silently clips to the screen region."
+  (setf rect (clamp-rect-to-screen rect))
+  (loop
+    :repeat (rect-rows region)
+    :for y :from (+ (rect-y rect) (rect-y region)) :below (array-dimension buffer 0)
+    :do (loop :repeat (rect-cols region)
+              :for x :from (+ (rect-x rect) (rect-x region))
+                :below (array-dimension buffer 1)
+              :for cell = (aref buffer y x)
+              :do (setf (cell-style cell) (copy-style-from style (cell-style cell)))
+                  (when char
+                    (setf (cell-string cell) (string char))))))
 
 (defstruct patch
   (cell (error "no diff cell") :type (or null cell))

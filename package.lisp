@@ -31,7 +31,7 @@
            #:set-foreground #:set-background
            #:set-style #:set-style-from-old
 
-           #:event
+           #:event #:make-event
            #:event-kind #:event-shiftp #:event-altp #:event-controlp #:event-metap
            #:mouse-event-p
            #:mouse-data

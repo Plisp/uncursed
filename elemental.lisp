@@ -102,22 +102,22 @@
                (clamp-rect rect (make-rect :x 0 :y 0
                                            :rows (array-dimension *put-buffer* 0)
                                            :cols (array-dimension *put-buffer* 1))))
-         (loop
-           :for thing :in renderables
-           :do (multiple-value-bind (view grow fill-bg)
-                   (render thing child-rect)
-                 (or grow (setf grow 0))
-                 (alexandria:maxf max-height (funcall other-span (rect view)))
-                 (setf (rect view) (clamp-rect (rect view) rect))
-                 ;; update x for the next invocation
-                 (setf child-rect (funcall copier child-rect
-                                           (+ (funcall coord (rect view))
-                                              (funcall span (rect view)))
-                                           (rect-cols child-rect))
-                       child-rect (clamp-rect child-rect rect))
-                 (push grow growth-factors)
-                 (push fill-bg child-bgs)
-                 (push view children)))
+         (loop :for thing :in renderables
+               :do (multiple-value-bind (view grow fill-bg)
+                       (render thing child-rect)
+                     (or view (loop-finish))
+                     (or grow (setf grow 0))
+                     (alexandria:maxf max-height (funcall other-span (rect view)))
+                     (setf (rect view) (clamp-rect (rect view) rect))
+                     ;; update x for the next invocation
+                     (setf child-rect (funcall copier child-rect
+                                               (+ (funcall coord (rect view))
+                                                  (funcall span (rect view)))
+                                               (rect-cols child-rect))
+                           child-rect (clamp-rect child-rect rect))
+                     (push grow growth-factors)
+                     (push fill-bg child-bgs)
+                     (push view children)))
          ;; growth-factors to cells, first gets rest
          (let ((free-cols (- rect-x2 (funcall coord child-rect))) ; clamped, >= 0
                (total-factor (reduce #'+ growth-factors)))
