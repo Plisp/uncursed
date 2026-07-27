@@ -318,7 +318,18 @@ the column is negative or the line is out of bounds."
           (loop :for char :across string
                 :do (put* char line col))))))
 
-(defun fill-rect (style region rect &optional char (buffer *put-buffer*))
+(defun blend-rgb (c1 c2 weight)
+  (when (null c1) (return-from blend-rgb c2))
+  (when (null c2) (return-from blend-rgb c1))
+  ;; sqrt blend looks nicer
+  (let ((r1 (red c1)) (r2 (red c2))
+        (g1 (green c1)) (g2 (green c2))
+        (b1 (blue c1)) (b2 (blue c2)))
+    (color (truncate (sqrt (+ (* weight r1 r1) (* (- 1 weight) r2 r2))))
+           (truncate (sqrt (+ (* weight g1 g1) (* (- 1 weight) g2 g2))))
+           (truncate (sqrt (+ (* weight b1 b1) (* (- 1 weight) b2 b2)))))))
+
+(defun fill-rect (style region rect &key char blend (buffer *put-buffer*))
   "Fills the rect `region' relative to `rect' with the provided style.
 Silently clips to the screen region."
   (setf rect (clamp-rect-to-screen rect))
@@ -329,7 +340,18 @@ Silently clips to the screen region."
               :for x :from (+ (rect-x rect) (rect-x region))
                 :below (array-dimension buffer 1)
               :for cell = (aref buffer y x)
-              :do (setf (cell-style cell) (copy-style-from style (cell-style cell)))
+              :for old-style = (cell-style cell)
+              :do (setf (cell-style cell)
+                        (cond ((not blend) (copy-style-from style old-style))
+                              ((numberp blend)
+                               (unless (<= 0 blend 1) (error "invalid blend ratio"))
+                               (copy-style (copy-style-from style old-style)
+                                           :fg (blend-rgb (fg style) (fg old-style) blend)
+                                           :bg (blend-rgb (bg style) (bg old-style) blend)))
+                              (t
+                               (copy-style (copy-style-from style old-style)
+                                           :fg (blend-rgb (fg style) (fg old-style) 0.5)
+                                           :bg (blend-rgb (bg style) (bg old-style) 0.5)))))
                   (when char
                     (setf (cell-string cell) (string char))))))
 

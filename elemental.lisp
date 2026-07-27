@@ -150,7 +150,7 @@
                               (funcall make-fillrect ; XXX how 2 permute arguments ?
                                        0 (funcall other-span (rect view))
                                        old-cols expansion)
-                              (rect view) #\space))
+                              (rect view) :char #\space))
          ;; take as little space as possible
          (make-instance 'view :rect (funcall copier2 rect
                                              (when noalloc
