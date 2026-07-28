@@ -32,9 +32,9 @@
 (defun horizontal (&rest things) (make-instance 'horizontal :things things))
 (defun vertical (&rest things) (make-instance 'vertical :things things))
 
-(defmethod tui:render ((thing display) rect)
+(defmethod render-state ((thing display) rect)
   (when (< (tui:rect-rows rect) 3)
-    (return-from tui:render))
+    (return-from render-state))
   (let* ((colors '(#x2aa198 #xfcba03))
          (cols (tui:display-width (display-string thing)))
          (viewrect (tui:copy-rect rect :cols (+ 1 cols) :rows 3)))
@@ -57,13 +57,20 @@
                                       (tui:mouse-within (tui:event-kind e) rect)))))
             42 #xaa3300)))
 
-(defmethod tui:render ((split horizontal) rect)
-  (values (tui:horizontal-container rect (things split)) 1 #x33aa00))
-(defmethod tui:render ((split vertical) rect)
-  (values (tui:vertical-container rect (things split)) 1 #x3300aa))
+(defun render-iterator (things)
+  "returns a closure over its argument `things'"
+  (lambda (rect)
+    (when things
+      (multiple-value-prog1 (render-state (car things) rect)
+        (setf things (cdr things))))))
 
-(defmethod tui:render ((ui ui) rect)
-  (tui:render (state ui) rect))
+(defmethod render-state ((split horizontal) rect)
+  (values (tui:horizontal-container rect (render-iterator (things split))) 1 #x33aa00))
+(defmethod render-state ((split vertical) rect)
+  (values (tui:vertical-container rect (render-iterator (things split))) 1 #x3300aa))
+
+(defmethod tui:render ((ui ui))
+  (render-state (state ui) (tui:make-rect :x 0 :y 0 :rows (tui:rows ui) :cols (tui:cols ui))))
 
 (defvar *tui*)
 

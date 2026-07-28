@@ -140,8 +140,6 @@
            #:elemental
            #:view
            #:children #:focused #:key-handler #:mouse-handler
-           #:render
-           #:render-state
-           #:root-view
+           #:root-view #:render
            #:horizontal-container #:vertical-container
            ))

@@ -35,9 +35,6 @@
     (when (rect elt)
       (format stream "y:~a x:~a" (rect-y (rect elt)) (rect-x (rect elt))))))
 
-(defgeneric render (thing rect)
-  (:documentation "(thing,rect) -> (values view grow &optional fill-bg)"))
-
 ;;; event dispatching
 (defclass elemental (tui)
   ((%root-view :initarg :root-view
@@ -45,9 +42,11 @@
                :reader root-view
                :type (or null view))))
 
+(defgeneric render (ui)
+  (:documentation "should return the root of view tree"))
+
 (defmethod redisplay ((tui elemental))
-  (setf (slot-value tui '%root-view)
-        (render tui (make-rect :x 0 :y 0 :cols (cols tui) :rows (rows tui)))))
+  (setf (slot-value tui '%root-view) (render tui)))
 
 (defun view-traverse (view callback)
   (let ((res (funcall callback view)))
@@ -77,7 +76,7 @@
 ;; complicates the algorithm and may affect performance. In this case perhaps the user
 ;; should be responsible for making global decisions to rebalance things?
 (flet
-    ((render-container (rect renderables
+    ((render-container (rect renderer
                         coord span other-span blitter copier copier2 make-fillrect)
        (let ((children (list))
              (child-bgs (list))
@@ -97,27 +96,26 @@
                     :coordinate (rect-x2 rect)
                     :bounds :column
                     :rect (screen-rect)))
-         (or ())
          (setf rect
                (clamp-rect rect (make-rect :x 0 :y 0
                                            :rows (array-dimension *put-buffer* 0)
                                            :cols (array-dimension *put-buffer* 1))))
-         (loop :for thing :in renderables
-               :do (multiple-value-bind (view grow fill-bg)
-                       (render thing child-rect)
-                     (or view (loop-finish))
-                     (or grow (setf grow 0))
-                     (alexandria:maxf max-height (funcall other-span (rect view)))
-                     (setf (rect view) (clamp-rect (rect view) rect))
-                     ;; update x for the next invocation
-                     (setf child-rect (funcall copier child-rect
-                                               (+ (funcall coord (rect view))
-                                                  (funcall span (rect view)))
-                                               (rect-cols child-rect))
-                           child-rect (clamp-rect child-rect rect))
-                     (push grow growth-factors)
-                     (push fill-bg child-bgs)
-                     (push view children)))
+         (loop
+           (multiple-value-bind (view grow fill-bg)
+               (funcall renderer child-rect)
+             (or view (return))
+             (or grow (setf grow 0))
+             (alexandria:maxf max-height (funcall other-span (rect view)))
+             (setf (rect view) (clamp-rect (rect view) rect))
+             ;; update x for the next invocation
+             (setf child-rect (funcall copier child-rect
+                                       (+ (funcall coord (rect view))
+                                          (funcall span (rect view)))
+                                       (rect-cols child-rect))
+                   child-rect (clamp-rect child-rect rect))
+             (push grow growth-factors)
+             (push fill-bg child-bgs)
+             (push view children)))
          ;; growth-factors to cells, first gets rest
          (let ((free-cols (- rect-x2 (funcall coord child-rect))) ; clamped, >= 0
                (total-factor (reduce #'+ growth-factors)))
@@ -175,25 +173,26 @@
                :do (setf (aref *put-buffer* (+ (rect-y dest) y-offset) x)
                          (copy-cell (aref *put-buffer* (+ (rect-y src) y-offset) x)))))))
 
-  (defun horizontal-container (rect renderables)
+  (defun horizontal-container (rect renderer)
     "The `rect' argument indicates the maximum bounds for this container, which may
 not be reached unless the last child element has positive grow factor.
-`render' takes a (thing,rect) -> (values view grow &optional fill-bg)
+`renderer' takes a (thing,rect) -> (values view grow &optional fill-bg)
+and is repeatedly called until it returns NIL.
 `view''s rect should bound the area drawn to the buffer, and is clamped to `rect'.
 `grow' is a non-negative integer indicating the *proportion* of free space to expand.
 If it is zero, no expansion occurs."
-    (render-container rect renderables #'rect-x #'rect-cols #'rect-rows #'row-backwards-blit
+    (render-container rect renderer #'rect-x #'rect-cols #'rect-rows #'row-backwards-blit
                       (lambda (rect a b) (copy-rect rect :x a :cols b))
                       (lambda (rect a b) (copy-rect rect :cols a :rows b))
                       (lambda (a b c d) (make-rect :y a :rows b :x c :cols d))))
 
-  (defun vertical-container (rect renderables)
+  (defun vertical-container (rect renderer)
     "The `rect' argument indicates the maximum bounds for this container, which may
 not be reached unless the last child element has positive grow factor.
 `view''s rect should bound the area drawn to the buffer, and is clamped to `rect'.
 `grow' is a non-negative integer indicating the *proportion* of free space to expand.
 If it is zero, no expansion occurs."
-    (render-container rect renderables #'rect-y #'rect-rows #'rect-cols #'col-backwards-blit
+    (render-container rect renderer #'rect-y #'rect-rows #'rect-cols #'col-backwards-blit
                       (lambda (rect a b) (copy-rect rect :y a :rows b))
                       (lambda (rect a b) (copy-rect rect :rows a :cols b))
                       (lambda (a b c d) (make-rect :x a :cols b :y c :rows d)))))
