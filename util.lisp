@@ -256,7 +256,7 @@ pointer to the original termios struct returned by a call to `setup-term', to be
   row
   col)
 
-(defstruct event
+(defstruct (event (:type list))
   kind
   (shiftp nil)
   (altp nil)
@@ -276,7 +276,7 @@ pointer to the original termios struct returned by a call to `setup-term', to be
   (make-event :kind key
               :shiftp (plusp (logand (1- mod) #b0001))
               :altp (plusp (logand (1- mod) #b0010))
-              :controlp (logand (1- mod) #b0100)
+              :controlp (plusp (logand (1- mod) #b0100))
               :metap (plusp (logand (1- mod) #b1000))))
 
 ;; application mode, mostly unused
@@ -333,10 +333,12 @@ pointer to the original termios struct returned by a call to `setup-term', to be
        (return-from read-function-and-special-keys
          (case terminator
            (#\~
-            (or (code->fkey code) (go fail)))
+            (if-let (code (code->fkey code))
+              (make-event :kind code)
+              (go fail)))
            (#\h
             (if (= code 4)
-                :insert ; st uses DEC convention
+                (make-event :kind :insert) ; st uses DEC convention
                 (go fail)))
            (#\; ; modified key
             (if (= code 1)

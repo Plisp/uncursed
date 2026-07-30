@@ -117,12 +117,12 @@
               6 1
               (tui:make-style :fg (car *panel-color*) :boldp t))
     ;; water bar
-    (tui:put-style (tui:make-style :fg #x228B22 :bg #xD6A373 :boldp t)
+    (tui:fill-rect (tui:make-style :fg #x228B22 :bg #xD6A373 :boldp t)
                    (tui:make-rect :x 1 :y 5
                                   :rows 1
                                   :cols *panel-food*))
     (maybe-rainbow)
-    (tui:put-style (tui:make-style :bg (car *panel-color*) :boldp t)
+    (tui:fill-rect (tui:make-style :bg (car *panel-color*) :boldp t)
                    (tui:make-rect :x (1+ *panel-food*) :y 5
                                   :rows 1
                                   :cols (- *tui-width* *sand-width* *panel-food* 2)))
@@ -136,12 +136,12 @@
               8 1
               (tui:make-style :fg (car *panel-color*) :boldp t))
     ;; water bar
-    (tui:put-style (tui:make-style :fg #x228B22 :bg #x40A4DF :boldp t)
+    (tui:fill-rect (tui:make-style :fg #x228B22 :bg #x40A4DF :boldp t)
                    (tui:make-rect :x 1 :y 7
                                   :rows 1
                                   :cols *panel-water*))
     (maybe-rainbow)
-    (tui:put-style (tui:make-style :bg (car *panel-color*) :boldp t)
+    (tui:fill-rect (tui:make-style :bg (car *panel-color*) :boldp t)
                    (tui:make-rect :x (1+ *panel-water*) :y 7
                                   :rows 1
                                   :cols (- *tui-width* *sand-width* *panel-water* 2)))
