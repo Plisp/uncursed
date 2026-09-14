@@ -32,45 +32,53 @@
 (defun horizontal (&rest things) (make-instance 'horizontal :things things))
 (defun vertical (&rest things) (make-instance 'vertical :things things))
 
+(defclass display-view (tui:view)
+  ((display :initarg :display
+            :reader view-display)))
+
 (defmethod render-state ((thing display) rect)
   (when (< (tui:rect-rows rect) 3)
     (return-from render-state))
-  (let* ((colors '(#x2aa198 #xfcba03))
-         (cols (tui:display-width (display-string thing)))
+  (let* ((cols (tui:display-width (display-string thing)))
          (viewrect (tui:copy-rect rect :cols (+ 1 cols) :rows 3)))
     (tui:puts (make-string (+ 1 cols) :initial-element #\-) 1 1 viewrect)
-    (tui:puts (display-string thing) 2 2 viewrect
-              (tui:make-style :fg (if (focused thing)
-                                      (first colors)
-                                      (second colors))))
     (tui:puts (make-string (+ 1 cols) :initial-element #\-) 3 1 viewrect)
     (values (make-instance
-             'tui:view
+             'display-view
+             :display thing
              :rect viewrect
              :mouse-handler (lambda (v e)
-                              (let ((rect (tui:rect v)))
-                                (setf (display-string thing)
-                                      (format nil "was ~dx~d at (~d,~d)"
-                                              (tui:rect-rows rect) (tui:rect-cols rect)
-                                              (tui:rect-x rect) (tui:rect-y rect)))
-                                (setf (focused thing)
-                                      (tui:mouse-within (tui:event-kind e) rect)))))
+                              (setf (focused thing)
+                                    (tui:mouse-within (tui:event-kind e) (tui:rect v)))))
             42 #xaa3300)))
 
-(defun render-iterator (things)
-  "returns a closure over its argument `things'"
-  (lambda (rect)
-    (when things
-      (multiple-value-prog1 (render-state (car things) rect)
-        (setf things (cdr things))))))
+(defun label-sizes (view)
+  "Writes the size computed by the last layout."
+  (when (typep view 'display-view)
+    (let ((rect (tui:rect view)))
+      (tui:puts (format nil "~dx~d at (~d,~d)"
+                        (tui:rect-rows rect) (tui:rect-cols rect)
+                        (tui:rect-x rect) (tui:rect-y rect))
+                2 2 rect
+                (tui:make-style :fg (if (focused (view-display view)) #x2aa198 #xfcba03)))))
+  (mapc #'label-sizes (tui:children view)))
 
 (defmethod render-state ((split horizontal) rect)
-  (values (tui:horizontal-container rect (render-iterator (things split))) 1 #x33aa00))
+  (values (tui:with-horizontal (rect)
+            (dolist (thing (things split))
+              (tui:place (rect) (render-state thing rect))))
+          1 #x33aa00))
 (defmethod render-state ((split vertical) rect)
-  (values (tui:vertical-container rect (render-iterator (things split))) 1 #x3300aa))
+  (values (tui:with-vertical (rect)
+            (dolist (thing (things split))
+              (tui:place (rect) (render-state thing rect))))
+          1 #x3300aa))
 
 (defmethod tui:render ((ui ui))
-  (render-state (state ui) (tui:make-rect :x 0 :y 0 :rows (tui:rows ui) :cols (tui:cols ui))))
+  (let ((root (render-state (state ui)
+                            (tui:make-rect :x 0 :y 0 :rows (tui:rows ui) :cols (tui:cols ui)))))
+    (label-sizes root)
+    root))
 
 (defvar *tui*)
 
@@ -84,7 +92,7 @@
                                   (make-instance 'display :string "dimensions"))))))
     (setf *tui* tui)
     (unwind-protect (tui:run tui :redisplay-on-input t :mouse :hover)
-      #+sbcl
+      #+(and sbcl slynk)
       (sb-concurrency:send-message *log* :stop))))
 
 (defmethod tui:dispatch-event :around ((ui ui) event)

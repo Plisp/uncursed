@@ -135,7 +135,7 @@
 
 ;;; tick logic
 
-(defparameter *tick* 0.032)
+(defparameter *tick* 0.016)
 
 (defgeneric update-wave (wave rows cols))
 

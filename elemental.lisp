@@ -75,124 +75,209 @@
 ;; Shrinking may trigger arbitrary reallocations of children which significantly
 ;; complicates the algorithm and may affect performance. In this case perhaps the user
 ;; should be responsible for making global decisions to rebalance things?
-(flet
-    ((render-container (rect renderer
-                        coord span other-span blitter copier copier2 make-fillrect)
-       (let ((children (list))
-             (child-bgs (list))
-             (child-rect rect)
-             (rect-x2 (+ (funcall coord rect) (funcall span rect)))
-             (max-height 0)
-             (growth-factors (list))
-             (expansions (list))
-             noalloc)
-         (or (<= (rect-y2 rect) (array-dimension *put-buffer* 0))
-             (error 'rect-bounds-error
-                    :coordinate (rect-y2 rect)
-                    :bounds :line
-                    :rect (screen-rect)))
-         (or (<= (rect-x2 rect) (array-dimension *put-buffer* 1))
-             (error 'rect-bounds-error
-                    :coordinate (rect-x2 rect)
-                    :bounds :column
-                    :rect (screen-rect)))
-         (setf rect
-               (clamp-rect rect (make-rect :x 0 :y 0
-                                           :rows (array-dimension *put-buffer* 0)
-                                           :cols (array-dimension *put-buffer* 1))))
-         (loop
-           (multiple-value-bind (view grow fill-bg)
-               (funcall renderer child-rect)
-             (or view (return))
-             (or grow (setf grow 0))
-             (alexandria:maxf max-height (funcall other-span (rect view)))
-             (setf (rect view) (clamp-rect (rect view) rect))
-             ;; update x for the next invocation
-             (setf child-rect (funcall copier child-rect
-                                       (+ (funcall coord (rect view))
-                                          (funcall span (rect view)))
-                                       (rect-cols child-rect))
-                   child-rect (clamp-rect child-rect rect))
-             (push grow growth-factors)
-             (push fill-bg child-bgs)
-             (push view children)))
-         ;; growth-factors to cells, first gets rest
-         (let ((free-cols (- rect-x2 (funcall coord child-rect))) ; clamped, >= 0
-               (total-factor (reduce #'+ growth-factors)))
-           ;; we can be space conservative if nobody wants to expand
-           (if (= 0 total-factor)
-               (setf noalloc t)
-               (loop :for allocated = 0 :then (+ allocated allocation)
-                     :for w :in growth-factors
-                     :for allocation = (if (zerop w)
-                                           0 ; assuming factors >= 0, this is non-negative
-                                           (truncate free-cols (/ total-factor w)))
-                     :do (push allocation expansions)
-                     :finally (incf (car expansions) (- free-cols allocated))
-                              (setf expansions (nreverse expansions)))))
-         ;; allocate expansion space backwards, while shifting cells forwards
-         ;; using fill-rect to fill in the gaps according to child-bgs
-         (loop :for view :in children
-               :for expansion = (or (pop expansions) (loop-finish))
-               :for fill-bg :in child-bgs
-               :for old = (rect view)
-               :for old-cols = (funcall span (rect view))
-               :for new-cols = (+ old-cols expansion)
-               :for end-offset = (- rect-x2 new-cols) :then (- end-offset new-cols)
-               :do (view-traverse view (lambda (v)
+(declaim (inline rect-start rect-size rect-cross-start rect-cross-size
+                 copy-rect-along make-rect-along))
+(defun rect-start (rect axis)
+  (if (eq axis :horizontal) (rect-x rect) (rect-y rect)))
+(defun rect-size (rect axis)
+  (if (eq axis :horizontal) (rect-cols rect) (rect-rows rect)))
+(defun rect-cross-start (rect axis)
+  (if (eq axis :horizontal) (rect-y rect) (rect-x rect)))
+(defun rect-cross-size (rect axis)
+  (if (eq axis :horizontal) (rect-rows rect) (rect-cols rect)))
+
+(defun copy-rect-along (rect axis &key start size cross-start cross-size)
+  (if (eq axis :horizontal)
+      (copy-rect rect :x start :cols size :y cross-start :rows cross-size)
+      (copy-rect rect :y start :rows size :x cross-start :cols cross-size)))
+
+(defun make-rect-along (axis &key start size cross-start cross-size)
+  (if (eq axis :horizontal)
+      (make-rect :x start :cols size :y cross-start :rows cross-size)
+      (make-rect :y start :rows size :x cross-start :cols cross-size)))
+
+(defun backwards-blit (src dest axis)
+  "Copies the cells of `src' to `dest', which lies further along `axis'.
+Do it furthest first to avoid erasing content."
+  (flet ((index (along cross)
+           (if (eq axis :horizontal)
+               (array-row-major-index *put-buffer* cross along)
+               (array-row-major-index *put-buffer* along cross))))
+    (loop
+      :for offset :downfrom (1- (rect-size src axis)) :to 0
+      :do (loop
+            :for cross :from (rect-cross-start src axis)
+              :below (+ (rect-cross-start src axis) (rect-cross-size src axis))
+            ;; dest.start+src.size <= dest.start+dest.size <= bound
+            :do (setf (row-major-aref *put-buffer*
+                                      (index (+ (rect-start dest axis) offset)
+                                             cross))
+                      (copy-cell (row-major-aref *put-buffer*
+                                                 (index (+ (rect-start src axis) offset)
+                                                        cross))))))))
+
+(defstruct (container-cursor (:conc-name cursor-))
+  axis
+  rect
+  child-rect
+  limit
+  (max-cross-size 0)
+  (children (list))
+  (child-bgs (list))
+  (growth-factors (list)))
+
+(defun setup-container (rect axis)
+  "Validates `rect' and returns a cursor placing children along `axis'."
+  (check-type axis (member :horizontal :vertical))
+  (or (<= (rect-y2 rect) (array-dimension *put-buffer* 0))
+      (error 'rect-bounds-error
+             :coordinate (rect-y2 rect)
+             :bounds :line
+             :rect (screen-rect)))
+  (or (<= (rect-x2 rect) (array-dimension *put-buffer* 1))
+      (error 'rect-bounds-error
+             :coordinate (rect-x2 rect)
+             :bounds :column
+             :rect (screen-rect)))
+  (setf rect (clamp-rect rect (screen-rect)))
+  (make-container-cursor :axis axis
+                         :rect rect
+                         :child-rect rect
+                         :limit (+ (rect-start rect axis) (rect-size rect axis))))
+
+(declaim (inline remaining-rect))
+(defun remaining-rect (cursor)
+  "The space left for the cursor's next child."
+  (cursor-child-rect cursor))
+
+(declaim (inline container-full-p))
+(defun container-full-p (cursor)
+  "Is there no space left for another child?"
+  (let ((r (cursor-child-rect cursor)))
+    (or (zerop (rect-cols r)) (zerop (rect-rows r)))))
+
+(defun place-child (cursor view &optional grow fill-bg)
+  "Records a rendered `view' to the cursor as is and advances to its boundary.
+Returns `view', ignoring NIL."
+  (when view
+    (let ((parent (cursor-rect cursor))
+          (axis (cursor-axis cursor)))
+      (setf (rect view) (clamp-rect (rect view) parent))
+      (alexandria:maxf (cursor-max-cross-size cursor) (rect-cross-size (rect view) axis))
+      (setf (cursor-child-rect cursor)
+            (clamp-rect (copy-rect-along (cursor-child-rect cursor) axis
+                                         :start (+ (rect-start (rect view) axis)
+                                                   (rect-size (rect view) axis)))
+                        parent))
+      (push (or grow 0) (cursor-growth-factors cursor))
+      (push fill-bg (cursor-child-bgs cursor))
+      (push view (cursor-children cursor))))
+  view)
+
+(defun pad-cells (cursor n)
+  "Leaves `n' cells free along the cursor's axis."
+  (unless (container-full-p cursor)
+    (place-child cursor
+                 (make-instance 'view
+                                :rect (copy-rect-along (cursor-child-rect cursor)
+                                                       (cursor-axis cursor)
+                                                       :size n :cross-size 0)))))
+
+(defun layout-container (cursor)
+  "Distributes the free space among children by growth factor and returns the
+container view with its children in the order they were placed."
+  (let* ((axis (cursor-axis cursor))
+         (parent (cursor-rect cursor))
+         (child-rect (cursor-child-rect cursor))
+         (limit (cursor-limit cursor))
+         (children (cursor-children cursor))
+         (growth-factors (cursor-growth-factors cursor))
+         (expansions (list))
+         noalloc)
+    ;; growth-factors to cells, first gets rest
+    (let ((free (- limit (rect-start child-rect axis))) ; clamped, >= 0
+          (total-factor (reduce #'+ growth-factors)))
+      ;; we can be space conservative if nobody wants to expand
+      (if (= 0 total-factor)
+          (setf noalloc t)
+          (loop :for allocated = 0 :then (+ allocated allocation)
+                :for w :in growth-factors
+                :for allocation = (if (zerop w)
+                                      0 ; assuming factors >= 0, this is non-negative
+                                      (truncate free (/ total-factor w)))
+                :do (push allocation expansions)
+                :finally (incf (car expansions) (- free allocated))
+                         (setf expansions (nreverse expansions)))))
+    ;; allocate expansion space backwards, while shifting cells forwards
+    ;; using fill-rect to fill in the gaps according to child-bgs
+    (loop :for view :in children
+          :for expansion = (or (pop expansions) (loop-finish))
+          :for fill-bg :in (cursor-child-bgs cursor)
+          :for old = (rect view)
+          :for old-size = (rect-size old axis)
+          :for new-size = (+ old-size expansion)
+          :for start = (- limit new-size) :then (- start new-size)
+          :for delta = (- start (rect-start old axis))
+          :do (setf (rect view) (copy-rect-along old axis :start start :size new-size))
+              (unless (zerop delta)
+                (dolist (child (children view))
+                  (view-traverse child (lambda (v)
                                          (setf (rect v)
-                                               (funcall copier (rect v) end-offset new-cols))
-                                         t))
-                   (funcall blitter old (funcall copier old end-offset new-cols))
-                   (fill-rect (make-style :bg fill-bg)
-                              (funcall make-fillrect ; XXX how 2 permute arguments ?
-                                       0 (funcall other-span (rect view))
-                                       old-cols expansion)
-                              (rect view) :char #\space))
-         ;; take as little space as possible
-         (make-instance 'view :rect (funcall copier2 rect
-                                             (when noalloc
-                                               (- (funcall coord child-rect)
-                                                  (funcall coord rect)))
-                                             max-height)
-                              :focused (some #'focused children)
-                              :children children)))
-     (row-backwards-blit (src dest)
-       (loop
-         :for x-offset :downfrom (1- (rect-cols src)) :to 0
-         :do (loop
-               :for y :from (rect-y src) :below (rect-y2 src)
-               ;; dest.x+src.cols <= dest.x+dest.cols <= x bound
-               :do (setf (aref *put-buffer* y (+ (rect-x dest) x-offset))
-                         (copy-cell (aref *put-buffer* y (+ (rect-x src) x-offset)))))))
-     (col-backwards-blit (src dest)
-       (loop
-         :for y-offset :downfrom (1- (rect-rows src)) :to 0
-         :do (loop
-               :for x :from (rect-x src) :below (rect-x2 src)
-               :do (setf (aref *put-buffer* (+ (rect-y dest) y-offset) x)
-                         (copy-cell (aref *put-buffer* (+ (rect-y src) y-offset) x)))))))
+                                               (copy-rect-along
+                                                (rect v) axis
+                                                :start (+ delta
+                                                          (rect-start (rect v) axis))))
+                                         t))))
+              (backwards-blit old (rect view) axis)
+              (fill-rect (make-style :bg fill-bg)
+                         (make-rect-along axis :start old-size :size expansion
+                                               :cross-start 0
+                                               :cross-size (rect-cross-size (rect view) axis))
+                         (rect view) :char #\space))
+    ;; take as little space as possible
+    (make-instance 'view :rect (copy-rect-along parent axis
+                                                :size (when noalloc
+                                                        (- (rect-start child-rect axis)
+                                                           (rect-start parent axis)))
+                                                :cross-size (cursor-max-cross-size cursor))
+                         :focused (some #'focused children)
+                         :children (nreverse children))))
 
-  (defun horizontal-container (rect renderer)
-    "The `rect' argument indicates the maximum bounds for this container, which may
-not be reached unless the last child element has positive grow factor.
-`renderer' takes a (thing,rect) -> (values view grow &optional fill-bg)
-and is repeatedly called until it returns NIL.
-`view''s rect should bound the area drawn to the buffer, and is clamped to `rect'.
-`grow' is a non-negative integer indicating the *proportion* of free space to expand.
-If it is zero, no expansion occurs."
-    (render-container rect renderer #'rect-x #'rect-cols #'rect-rows #'row-backwards-blit
-                      (lambda (rect a b) (copy-rect rect :x a :cols b))
-                      (lambda (rect a b) (copy-rect rect :cols a :rows b))
-                      (lambda (a b c d) (make-rect :y a :rows b :x c :cols d))))
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (defun place-expansion (cursor var form)
+    (with-gensyms (view grow fill-bg)
+      `(unless (container-full-p ,cursor)
+         (multiple-value-bind (,view ,grow ,fill-bg)
+             (let ((,var (cursor-child-rect ,cursor)))
+               (declare (ignorable ,var))
+               ,form)
+           (place-child ,cursor ,view ,grow ,fill-bg))))))
 
-  (defun vertical-container (rect renderer)
-    "The `rect' argument indicates the maximum bounds for this container, which may
-not be reached unless the last child element has positive grow factor.
-`view''s rect should bound the area drawn to the buffer, and is clamped to `rect'.
-`grow' is a non-negative integer indicating the *proportion* of free space to expand.
-If it is zero, no expansion occurs."
-    (render-container rect renderer #'rect-y #'rect-rows #'rect-cols #'col-backwards-blit
-                      (lambda (rect a b) (copy-rect rect :y a :rows b))
-                      (lambda (rect a b) (copy-rect rect :rows a :cols b))
-                      (lambda (a b c d) (make-rect :x a :cols b :y c :rows d)))))
+(defmacro with-container ((rect axis &optional cursor) &body body)
+  "Evaluates `body' to place the children of a container along `axis' in order.
+The following macro bindings are supplied to record views, ignoring their arguments
+once the container is full.
+- (place (var) form) evaluates `form' with `var' bound to the remaining space.
+`form' should return (values view grow &optional fill-bg). `view''s rect should bound the
+area drawn to the buffer, and is clamped to `rect'. A positive `grow' is the *proportion* of
+the space left once all children are placed that the view expands into, filled with
+`fill-bg'; without growth the container takes as little space as possible.
+- (pad n) leaves `n' cells empty.
+- (full) is true once the container is full, so the body can stop early.
+- `cursor' when provided is bound to the container's cursor for use with the
+helpers `place-child', `pad-cells', `container-full-p' and `remaining-rect'.
+These must NOT be called within place.
+Returns the container view."
+  (let ((cursor (or cursor (gensym "CURSOR"))))
+    `(let ((,cursor (setup-container ,rect ,axis)))
+       (macrolet ((place ((var) form) (place-expansion ',cursor var form))
+                  (pad (n) `(pad-cells ,',cursor ,n))
+                  (full () `(container-full-p ,',cursor)))
+         ,@body)
+       (layout-container ,cursor))))
+
+(defmacro with-horizontal ((rect &optional cursor) &body body)
+  `(with-container (,rect :horizontal ,cursor) ,@body))
+
+(defmacro with-vertical ((rect &optional cursor) &body body)
+  `(with-container (,rect :vertical ,cursor) ,@body))

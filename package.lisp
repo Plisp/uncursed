@@ -141,5 +141,7 @@
            #:view
            #:children #:focused #:key-handler #:mouse-handler
            #:root-view #:render
-           #:horizontal-container #:vertical-container
+           #:with-container #:with-horizontal #:with-vertical #:place #:pad #:full
+           #:setup-container #:place-child #:pad-cells #:container-full-p
+           #:remaining-rect #:layout-container
            ))
