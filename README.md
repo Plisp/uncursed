@@ -5,7 +5,7 @@ A cross-platform library for writing terminal interfaces with minimal dependenci
 Some useful features are provided beyond stock curses functionality:
 while this library doesn't aim to provide a full async i/o loop, it does support input timeouts and thread-safe wakeups to integrate with other event sources. The buffer abstraction allows stateless color drawing (no leaky color pairs) while internally optimizing output sequences and makes an attempt to account for wide unicode characters, detecting attempts to overwrite them or draw them beyond the window edge. However width calculations are done character-wise which misses some combining rules and ambiguous characters are not yet localised. This will be improved as needed, PRs welcome!
 
-Some basic examples can be found in the `examples` directory and can be run via `(ql:quickload :uncursed-examples)` and `(uncursed-*:main)` while connected to a real pseudoterminal (you can use the slynk trick described below). A more realistic example is ![weave](https://github.com/plisp/weave).
+Some basic examples can be found in the `examples` directory and can be run via `(ql:quickload :uncursed-examples)` and `(uncursed-*:main)` while connected to a real pseudoterminal (you can use the slynk trick described below). A more realistic example is [weave](https://github.com/plisp/weave).
 
 NEW: The `elemental` immediate mode layout API is partially stabilised, the `uncursed-layout` example and weave both use it.
 
