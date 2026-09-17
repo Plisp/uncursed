@@ -129,6 +129,7 @@ Do it furthest first to avoid erasing content."
 (defun setup-container (rect axis)
   "Validates `rect' and returns a cursor placing children along `axis'."
   (check-type axis (member :horizontal :vertical))
+  (setf rect (clamp-rect rect (screen-rect)))
   (or (<= (rect-y2 rect) (array-dimension *put-buffer* 0))
       (error 'rect-bounds-error
              :coordinate (rect-y2 rect)
@@ -139,7 +140,6 @@ Do it furthest first to avoid erasing content."
              :coordinate (rect-x2 rect)
              :bounds :column
              :rect (screen-rect)))
-  (setf rect (clamp-rect rect (screen-rect)))
   (make-container-cursor :axis axis
                          :rect rect
                          :child-rect rect
