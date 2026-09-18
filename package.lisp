@@ -123,8 +123,8 @@
            ;; fn
            #:wakeup
 
-           #:put
-           #:puts
+           #:put #:put*
+           #:puts #:puts*
            #:fill-rect
            ;; errors
            #:rect-bounds-error

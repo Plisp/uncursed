@@ -224,6 +224,13 @@ a wide character."))
             (and style (setf (cell-style cell) (copy-style-from style (cell-style cell)))))))
     width))
 
+(defun put* (char line col rect &optional style)
+  "put but clipping to rect"
+  (let ((width (character-width char)))
+    (when (and (<= 1 line (rect-rows rect))
+               (<= 1 col (- (rect-cols rect) (max 0 (1- width)))))
+      (put char line col rect style))))
+
 ;; default truncation is usually desired but annoying to implement for users who also want
 ;; correct wide character handling. A wrapping routine can use this anyways
 (defun puts (string line col rect &optional style (buffer *put-buffer*))
@@ -314,6 +321,12 @@ the column is negative or the line is out of bounds."
           ;; all combining characters, all fit at the index
           (loop :for char :across string
                 :do (put* char line col))))))
+
+(defun puts* (string line col rect &optional style)
+  "puts but clipping to rect"
+  (when (and (<= 1 line (rect-rows rect))
+             (<= 1 col (rect-cols rect)))
+    (puts string line col rect style)))
 
 (defun blend-rgb (c1 c2 weight)
   (when (null c1) (return-from blend-rgb c2))
