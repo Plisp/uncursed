@@ -60,15 +60,10 @@
               (return t))))
 
 (defun copy-style-from (style old)
-  (flet ((default (accessor)
-           (let ((provided (funcall accessor style)))
-             (if provided provided (funcall accessor old)))))
-    (make-style :bg (default #'bg)
-                :fg (default #'fg)
-                :boldp (default #'boldp)
-                :italicp (default #'italicp)
-                :reversep (default #'reversep)
-                :underlinep (default #'underlinep))))
+  "Merges `style' into `old'."
+  (copy-style old :fg (fg style) :bg (bg style)
+                  :boldp (boldp style) :italicp (italicp style)
+                  :reversep (reversep style) :underlinep (underlinep style)))
 
 (deftype buffer () '(array cell)) ; TODO use one-dimensional simple-array
 

@@ -50,7 +50,7 @@ All addressing is done relative to `rect`s. `rows` and `cols` get the toplevel t
 * `(puts string line col &optional rect style)` same thing with a string, with truncating behavior at rect edges.
 * `(fill-rect style region &optional rect char)` applies `style` to the region (relative to `rect`) and fills with a character if provided.
 
-These functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and optionally accept an immutable `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported.
+These functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and optionally accept an immutable `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported. Existing color is preserved by default when merging styles and attributes are off by default.
 ```lisp
 (defstruct (style (:conc-name nil) (:copier nil))
   (fg nil :type (or null (integer #x000000 #xffffff)) :read-only t)

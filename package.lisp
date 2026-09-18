@@ -98,6 +98,7 @@
            ;;; uncursed.lisp
            #:rect
            #:make-rect #:copy-rect
+           #:screen-rect
            #:rect-x #:rect-y #:rect-rows #:rect-cols
            #:rect-x2 #:rect-y2
            #:clamp-rect
@@ -141,6 +142,7 @@
            #:view
            #:children #:focused #:key-handler #:mouse-handler
            #:root-view #:render
+           #:view-traverse
            #:with-container #:with-horizontal #:with-vertical #:place #:pad #:full
            #:setup-container #:place-child #:pad-cells #:container-full-p
            #:remaining-rect #:layout-container

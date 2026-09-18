@@ -702,13 +702,16 @@ level cell grid."
 
   (defvar *default-style* (make-style)))
 
-(defun copy-style (style &key fg bg boldp italicp reversep underlinep)
-  (make-style :fg (or fg (fg style))
-              :bg (or bg (bg style))
-              :boldp (or boldp (boldp style))
-              :italicp (or italicp (italicp style))
-              :reversep (or reversep (reversep style))
-              :underlinep (or underlinep (underlinep style))))
+(defun copy-style (style &key (fg (fg style)) (bg (bg style))
+                              (boldp nil) (italicp nil)
+                              (reversep nil) (underlinep nil))
+  "Copies `style', preserving attributes whose override is :preserve.
+Colors are preserved by default, unless nil is supplied."
+  (make-style :fg fg :bg bg
+              :boldp (if (eq boldp :preserve) (boldp style) boldp)
+              :italicp (if (eq italicp :preserve) (italicp style) italicp)
+              :reversep (if (eq reversep :preserve) (reversep style) reversep)
+              :underlinep (if (eq underlinep :preserve) (underlinep style) underlinep)))
 
 (defun style-difference (a b)
   (let ((fga (fg a))
