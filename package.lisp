@@ -12,7 +12,7 @@
            #:style
            #:make-style #:copy-style
            #:fg #:bg #:boldp #:italicp #:reversep #:underlinep
-           #:style-difference
+           #:style= #:style-difference
            #:*default-style*
 
            #:character-width #:*character-widths*
@@ -69,7 +69,7 @@
                 #:style
                 #:make-style #:copy-style
                 #:fg #:bg #:boldp #:italicp #:reversep #:underlinep
-                #:style-difference
+                #:style= #:style-difference
                 #:*default-style*)
   (:local-nicknames (:sys #:uncursed-sys))
   (:export #:uncursed-error
@@ -93,7 +93,7 @@
            #:style
            #:make-style #:copy-style
            #:fg #:bg #:boldp #:italicp #:reversep #:underlinep
-           #:style-difference
+           #:style= #:style-difference
            #:*default-style*
            ;;; uncursed.lisp
            #:rect

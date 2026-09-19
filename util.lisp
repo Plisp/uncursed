@@ -23,12 +23,15 @@
      2)
     (t 1)))
 
+(declaim (inline character-width))
 (defun character-width (character)
   "Returns the displayed width of `character'. See %codepoint-width.
 It is recommended to bind *character-widths* dynamically in calling threads."
   (declare (optimize speed))
-  (or (gethash character *character-widths*)
-      (setf (gethash character *character-widths*) (%wcwidth character))))
+  (if (standard-char-p character)
+      1
+      (or (gethash character *character-widths*)
+          (setf (gethash character *character-widths*) (%wcwidth character)))))
 
  ;; add exceptions here
 (eval-when (:load-toplevel :execute)
@@ -713,24 +716,23 @@ Colors are preserved by default, unless nil is supplied."
               :reversep (if (eq reversep :preserve) (reversep style) reversep)
               :underlinep (if (eq underlinep :preserve) (underlinep style) underlinep)))
 
+(defun style= (a b)
+  "Whether `a' and `b' have equal colors and attributes, without allocating."
+  (or (eq a b)
+      (and (eql (fg a) (fg b))
+           (eql (bg a) (bg b))
+           (eq (boldp a) (boldp b))
+           (eq (italicp a) (italicp b))
+           (eq (reversep a) (reversep b))
+           (eq (underlinep a) (underlinep b)))))
+
 (defun style-difference (a b)
-  (let ((fga (fg a))
-        (fgb (fg b))
-        (bga (bg a))
-        (bgb (bg b))
-        differences)
-    (unless (or (and (null fga) (null fgb))
-                (and fga fgb
-                     (= (red fga) (red fgb))
-                     (= (green fga) (green fgb))
-                     (= (blue fga) (blue fgb))))
-      (setf (getf differences :fg) fgb))
-    (unless (or (and (null bga) (null bgb))
-                (and bga bgb
-                     (= (red bga) (red bgb))
-                     (= (green bga) (green bgb))
-                     (= (blue bga) (blue bgb))))
-      (setf (getf differences :bg) bgb))
+  "Computes a diff between styles"
+  (let (differences)
+    (unless (eql (fg a) (fg b))
+      (setf (getf differences :fg) (fg b)))
+    (unless (eql (bg a) (bg b))
+      (setf (getf differences :bg) (bg b)))
     (unless (eq (boldp a) (boldp b))
       (setf (getf differences :bold) (boldp b)))
     (unless (eq (italicp a) (italicp b))

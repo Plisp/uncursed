@@ -49,7 +49,7 @@
   (format stream "#<cell string:~a>" (cell-string cell)))
 
 (defun cell/= (cell1 cell2)
-  (or (style-difference (cell-style cell1) (cell-style cell2))
+  (or (not (style= (cell-style cell1) (cell-style cell2)))
       (string/= (the simple-string (cell-string cell1))
                 (the simple-string (cell-string cell2)))))
 
@@ -60,10 +60,13 @@
               (return t))))
 
 (defun copy-style-from (style old)
-  "Merges `style' into `old'."
-  (copy-style old :fg (fg style) :bg (bg style)
-                  :boldp (boldp style) :italicp (italicp style)
-                  :reversep (reversep style) :underlinep (underlinep style)))
+  "Merges `style' into `old', defaulting NIL to colors in `old'."
+  ;; If everything is already computed, just use style
+  (cond ((and (bg style) (fg style)) style)
+        ((style= style old) old)
+        (t (copy-style old :fg (or (fg style) (fg old)) :bg (or (bg style) (bg old))
+                           :boldp (boldp style) :italicp (italicp style)
+                           :reversep (reversep style) :underlinep (underlinep style)))))
 
 (deftype buffer () '(array cell)) ; TODO use one-dimensional simple-array
 
@@ -162,6 +165,8 @@ a wide character."))
 ;; triple-width is rare enough (e.g. three-em-dash) and terminal support is so lacking
 ;; that no special handling is implemented
 (defun put (char line col rect &optional style (buffer *put-buffer*))
+  "Checks bounds and draws `char' at coordinates relative to `rect'.
+Returns the width of the character printed, or NIL if cancelled by ignore-put."
   (check-type style (or style null))
   (let ((width (character-width char)))
     (or (<= 1 line (min (rect-rows rect)
@@ -169,8 +174,9 @@ a wide character."))
         (error 'rect-bounds-error
                :coordinate line :bounds :line
                :rect (clamp-rect-to-screen rect)))
-    (or (<= 1 col (min (- (rect-cols rect) (max 0 (1- width)))
-                       (- (array-dimension buffer 1) (rect-x rect))))
+    (or (and (<= 1 col)
+             (<= (+ (rect-x rect) (1- col) (max 1 width))
+                 (min (rect-x2 rect) (array-dimension buffer 1))))
         (error 'rect-bounds-error
                :coordinate col :bounds :column
                :rect (clamp-rect-to-screen rect)))
@@ -225,7 +231,7 @@ a wide character."))
     width))
 
 (defun put* (char line col rect &optional style)
-  "put but clipping to rect"
+  "put but clipping to rect, returning NIL otherwise."
   (let ((width (character-width char)))
     (when (and (<= 1 line (rect-rows rect))
                (<= 1 col (- (rect-cols rect) (max 0 (1- width)))))
@@ -240,6 +246,7 @@ the column is negative or the line is out of bounds."
   (let ((last-non-combining-char-pos (position-if-not #'zerop string
                                                       :key #'character-width
                                                       :from-end t))
+        (style-cache (make-hash-table :test #'eq))
         (first-cell-x (+ (rect-x rect) (1- col))))
     (or (<= 1 line (min (rect-rows rect) (- (array-dimension buffer 0) (rect-y rect))))
         (error 'rect-bounds-error
@@ -251,11 +258,25 @@ the column is negative or the line is out of bounds."
     (unless (< first-cell-x (array-dimension buffer 1))
       (return-from puts))
     ;; this will silently capture column bounds errors
-    (flet ((put* (char line col)
-             (handler-case
-                 (put char line col rect style buffer)
-               (rect-bounds-error ()
-                 (return-from puts)))))
+    (labels ((cell-at (col)
+               ;; check in-bounds first
+               (aref buffer (+ (rect-y rect) (1- line)) (+ (rect-x rect) (1- col))))
+             (compute-result-style (new cell)
+               (let ((old (cell-style cell)))
+                 ;; key cache by the style object, which should usually be shared
+                 (if-let (res (gethash old style-cache))
+                   res
+                   (setf (gethash old style-cache) (copy-style-from new old)))))
+             (put* (char line col)
+               ;; precompute result style for structural sharing
+               (let ((result-style
+                       (when (and (<= (+ (rect-x rect) col) (array-dimension buffer 1))
+                                  style)
+                         (compute-result-style style (cell-at col)))))
+                 (handler-case
+                     (put char line col rect result-style buffer)
+                   (rect-bounds-error ()
+                     (return-from puts))))))
       (if last-non-combining-char-pos
           (let* ((last-non-combining-char (char string last-non-combining-char-pos))
                  (last-non-combining-char-visual-offset
@@ -285,8 +306,12 @@ the column is negative or the line is out of bounds."
             ;; this may overwrite after the end of the string, so we check it before writing
             ;; the rest. Note the bounds check for correct truncation behavior
             (let ((lastcol (+ col last-non-combining-char-visual-offset)))
-              (when (< (+ (rect-x rect) (1- lastcol)) (array-dimension buffer 1))
-                (or (put last-non-combining-char line lastcol rect style buffer)
+              (when (<= (+ (rect-x rect) (1- lastcol)
+                           (character-width last-non-combining-char))
+                        (min (rect-x2 rect) (array-dimension buffer 1)))
+                (or (put last-non-combining-char line lastcol rect
+                         (and style (compute-result-style style (cell-at lastcol)))
+                         buffer)
                     ;; if IGNORE-PUT restart selected, abort here, before anything is written
                     (return-from puts))))
             ;; write first character after we've ascertained that the caller doesn't want to
@@ -295,7 +320,7 @@ the column is negative or the line is out of bounds."
             (unless (= first-non-combining-char-pos last-non-combining-char-pos)
               (setf (cell-string first-cell) (string first-non-combining-char))
               (and style (setf (cell-style first-cell)
-                               (copy-style-from style (cell-style first-cell))))
+                               (compute-result-style style first-cell)))
               (when first-to-overwrite
                 (setf (cell-string first-to-overwrite) (string #\space))))
             ;; put the rest normally, overwriting any previous contents unconditionally
@@ -323,47 +348,68 @@ the column is negative or the line is out of bounds."
                 :do (put* char line col))))))
 
 (defun puts* (string line col rect &optional style)
-  "puts but clipping to rect"
+  "puts but clipping to rect, returning NIL otherwise."
   (when (and (<= 1 line (rect-rows rect))
              (<= 1 col (rect-cols rect)))
     (puts string line col rect style)))
 
 (defun blend-rgb (c1 c2 weight)
+  (declare (optimize speed)
+           (type (real 0 1) weight))
   (when (null c1) (return-from blend-rgb c2))
   (when (null c2) (return-from blend-rgb c1))
   ;; sqrt blend looks nicer
-  (let ((r1 (red c1)) (r2 (red c2))
+  (let ((weight (coerce weight 'single-float))
+        (r1 (red c1)) (r2 (red c2))
         (g1 (green c1)) (g2 (green c2))
         (b1 (blue c1)) (b2 (blue c2)))
-    (color (truncate (sqrt (+ (* weight r1 r1) (* (- 1 weight) r2 r2))))
-           (truncate (sqrt (+ (* weight g1 g1) (* (- 1 weight) g2 g2))))
-           (truncate (sqrt (+ (* weight b1 b1) (* (- 1 weight) b2 b2)))))))
+    (declare (type single-float weight)
+             (type (unsigned-byte 8) r1 r2 g1 g2 b1 b2))
+    (color (truncate (sqrt (the single-float
+                                (+ (the single-float (* weight r1 r1))
+                                   (the single-float (* (- 1 weight) r2 r2))))))
+           (truncate (sqrt (the single-float
+                                (+ (the single-float (* weight g1 g1))
+                                   (the single-float (* (- 1 weight) g2 g2))))))
+           (truncate (sqrt (the single-float
+                                (+ (the single-float (* weight b1 b1))
+                                   (the single-float (* (- 1 weight) b2 b2)))))))))
 
 (defun fill-rect (style region rect &key char blend (buffer *put-buffer*))
   "Fills the rect `region' relative to `rect' with the provided style.
-Silently clips to the screen region."
-  (setf rect (clamp-rect-to-screen rect))
+Silently clips to the screen region. Blend is a weight between 0 and 1."
+  (when (and blend (not (<= 0 blend 1)))
+    (error "invalid blend ratio"))
   (loop
+    :with string = (when char (string char))
+    :with rect-clamped = (clamp-rect-to-screen rect)
+    :with style-cache = (make-hash-table :test #'eq)
     :repeat (rect-rows region)
-    :for y :from (+ (rect-y rect) (rect-y region)) :below (array-dimension buffer 0)
-    :do (loop :repeat (rect-cols region)
-              :for x :from (+ (rect-x rect) (rect-x region))
-                :below (array-dimension buffer 1)
-              :for cell = (aref buffer y x)
-              :for old-style = (cell-style cell)
-              :do (setf (cell-style cell)
-                        (cond ((not blend) (copy-style-from style old-style))
-                              ((numberp blend)
-                               (unless (<= 0 blend 1) (error "invalid blend ratio"))
-                               (copy-style (copy-style-from style old-style)
-                                           :fg (blend-rgb (fg style) (fg old-style) blend)
-                                           :bg (blend-rgb (bg style) (bg old-style) blend)))
-                              (t
-                               (copy-style (copy-style-from style old-style)
-                                           :fg (blend-rgb (fg style) (fg old-style) 0.5)
-                                           :bg (blend-rgb (bg style) (bg old-style) 0.5)))))
-                  (when char
-                    (setf (cell-string cell) (string char))))))
+    :for y :from (+ (rect-y rect-clamped) (rect-y region)) :below (array-dimension buffer 0)
+    :do (loop
+          :repeat (rect-cols region)
+          :for x :from (+ (rect-x rect-clamped) (rect-x region))
+            :below (array-dimension buffer 1)
+          :for cell = (aref buffer y x)
+          :for old-style = (cell-style cell)
+          :do (setf
+               (cell-style cell)
+               (cond
+                 ((not blend) (copy-style-from style old-style))
+                 ((numberp blend)
+                  (if (style= style old-style)
+                      old-style
+                      (if-let (res (gethash old-style style-cache))
+                        res
+                        (setf (gethash old-style style-cache)
+                              (copy-style old-style
+                                          :fg (blend-rgb (fg style) (fg old-style) blend)
+                                          :bg (blend-rgb (bg style) (bg old-style) blend)
+                                          :boldp (boldp style) :italicp (italicp style)
+                                          :reversep (reversep style)
+                                          :underlinep (underlinep style))))))))
+              (when char
+                (setf (cell-string cell) string)))))
 
 (defstruct patch
   (cell (error "no diff cell") :type (or null cell))

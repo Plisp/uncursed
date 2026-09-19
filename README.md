@@ -48,9 +48,9 @@ All addressing is done relative to `rect`s. `rows` and `cols` get the toplevel t
 
 * `(put char line col rect &optional style)` which writes `char` at 1-based line/col coordinates relative to `rect`. `put*` does the same but silently ignoring.
 * `(puts string line col rect &optional style)` same thing with a string, with truncating behavior at rect edges.`puts*` does the same but silently ignoring out of bounds rows.
-* `(fill-rect style region &optional rect char)` applies `style` to the region (relative to `rect`) and fills with a character if provided.
+* `(fill-rect style region rect &optional char blend)` applies `style` to the region (relative to `rect`) and fills with a character if provided. Optionally blends with existing color, preferring the provided one with weight `0 <= blend <= 1`.
 
-These functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and optionally accept an immutable `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported. Existing color is preserved by default when merging styles and attributes are off by default.
+These functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and optionally accept an immutable `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported. Existing color is preserved by default when merging styles and attributes are off by default, use copy-style `:preserve` to apply attributes.
 ```lisp
 (defstruct (style (:conc-name nil) (:copier nil))
   (fg nil :type (or null (integer #x000000 #xffffff)) :read-only t)

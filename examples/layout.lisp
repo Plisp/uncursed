@@ -18,8 +18,8 @@
           :accessor state)))
 
 (defclass display ()
-  ((string :initarg :string
-           :accessor display-string)
+  ((width :initarg :width
+          :accessor display-width)
    (focused :initform nil
             :accessor focused)))
 
@@ -36,13 +36,15 @@
   ((display :initarg :display
             :reader view-display)))
 
-(defmethod render-state ((thing display) rect)
+(defgeneric render-state (thing rect &key width &allow-other-keys))
+(defmethod render-state ((thing display) rect &key width)
   (when (< (tui:rect-rows rect) 3)
     (return-from render-state))
-  (let* ((cols (tui:display-width (display-string thing)))
-         (viewrect (tui:copy-rect rect :cols (+ 1 cols) :rows 3)))
-    (tui:puts (make-string (+ 1 cols) :initial-element #\-) 1 1 viewrect)
-    (tui:puts (make-string (+ 1 cols) :initial-element #\-) 3 1 viewrect)
+  (let* ((cols (display-width thing))
+         (viewrect (tui:clamp-rect (tui:copy-rect rect :cols (+ 1 cols) :rows 3)
+                                   (tui:screen-rect))))
+    (tui:puts* (make-string (+ 1 cols) :initial-element #\-) 1 1 viewrect)
+    (tui:puts* (make-string (+ 1 cols) :initial-element #\-) 3 1 viewrect)
     (values (make-instance
              'display-view
              :display thing
@@ -50,25 +52,30 @@
              :mouse-handler (lambda (v e)
                               (setf (focused thing)
                                     (tui:mouse-within (tui:event-kind e) (tui:rect v)))))
-            42 #xaa3300)))
+            width #xaa3300)))
 
 (defun label-sizes (view)
   "Writes the size computed by the last layout."
-  (when (typep view 'display-view)
-    (let ((rect (tui:rect view)))
-      (tui:puts (format nil "~dx~d at (~d,~d)"
-                        (tui:rect-rows rect) (tui:rect-cols rect)
-                        (tui:rect-x rect) (tui:rect-y rect))
-                2 2 rect
-                (tui:make-style :fg (if (focused (view-display view)) #x2aa198 #xfcba03)))))
+  (let ((rect (tui:rect view)))
+    (tui:puts* (format nil "~dx~d at (~d,~d)"
+                       (tui:rect-rows rect) (tui:rect-cols rect)
+                       (tui:rect-x rect) (tui:rect-y rect))
+               (round (tui:rect-rows rect) 2) (round (tui:rect-cols rect) 2)
+               rect
+               (tui:make-style :fg (if (and (typep view 'display-view)
+                                            (focused (view-display view)))
+                                       #x2aa198
+                                       #xfcba03))))
   (mapc #'label-sizes (tui:children view)))
 
-(defmethod render-state ((split horizontal) rect)
+(defmethod render-state ((split horizontal) rect &key)
   (values (tui:with-horizontal (rect)
             (dolist (thing (things split))
-              (tui:place (rect) (render-state thing rect))))
+              (tui:place (rect) (if (eq thing (car (things split)))
+                                    (render-state thing rect :width 2)
+                                    (render-state thing rect :width 1)))))
           1 #x33aa00))
-(defmethod render-state ((split vertical) rect)
+(defmethod render-state ((split vertical) rect &key)
   (values (tui:with-vertical (rect)
             (dolist (thing (things split))
               (tui:place (rect) (render-state thing rect))))
@@ -76,7 +83,8 @@
 
 (defmethod tui:render ((ui ui))
   (let ((root (render-state (state ui)
-                            (tui:make-rect :x 0 :y 0 :rows (tui:rows ui) :cols (tui:cols ui)))))
+                            (tui:make-rect :x 0 :y 0
+                                           :rows (tui:rows ui) :cols (tui:cols ui)))))
     (label-sizes root)
     root))
 
@@ -86,10 +94,10 @@
   (let ((tui (make-instance
               'ui
               :state (vertical
-                      (horizontal (make-instance 'display :string "click")
-                                  (make-instance 'display :string "to"))
-                      (horizontal (make-instance 'display :string "show")
-                                  (make-instance 'display :string "dimensions"))))))
+                      (horizontal (make-instance 'display :width 5)
+                                  (make-instance 'display :width 2))
+                      (horizontal (make-instance 'display :width 4)
+                                  (make-instance 'display :width 10))))))
     (setf *tui* tui)
     (unwind-protect (tui:run tui :redisplay-on-input t :mouse :hover)
       #+(and sbcl slynk)
