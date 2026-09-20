@@ -83,6 +83,9 @@ May only be called from within the dynamic-extent of a call to `run'."))
 (defgeneric cols (tui))
 (defgeneric redisplay (tui)
   (:documentation "Any drawing should be done in an unqualified method."))
+(defgeneric handle-resize (tui)
+  (:documentation "use this to detect resizes independent of ABA problems when redisplay-on-input
+is set."))
 
 (defun wakeup (tui)
   "Wakes up the event loop of `tui' in a thread-safe manner."
@@ -433,7 +436,7 @@ Silently clips to the screen region. Blend is a weight between 0 and 1."
   (loop :for i :below (array-total-size buffer)
         :do (setf (row-major-aref buffer i) (make-cell))))
 
-(defun handle-resize (tui)
+(defmethod handle-resize ((tui tui))
   (sys:set-style *default-style* (use-palette tui))
   (sys:clear-screen) ; terminals typically garble the screen irrecoverably
 

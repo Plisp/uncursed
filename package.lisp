@@ -115,6 +115,7 @@
            #:stop
            #:dispatch-event
            #:rows #:cols
+           #:handle-resize
            #:redisplay
 
            #:schedule-timer
