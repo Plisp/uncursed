@@ -81,8 +81,15 @@ May only be called from within the dynamic-extent of a call to `run'."))
 (defgeneric dispatch-event (tui event))
 (defgeneric rows (tui))
 (defgeneric cols (tui))
-(defgeneric redisplay (tui)
-  (:documentation "Any drawing should be done in an unqualified method."))
+(defgeneric redisplay-internal (tui)
+  (:documentation "Implements drawing to be triggered through `redisplay'."))
+
+(defun redisplay (tui)
+  "Redisplays `tui', returning T on completion or NIL when `quit-redisplay' is thrown."
+  (catch 'quit-redisplay
+    (redisplay-internal tui)
+    t))
+
 (defgeneric handle-resize (tui)
   (:documentation "use this to detect resizes independent of ABA problems when redisplay-on-input
 is set."))
@@ -101,6 +108,8 @@ is set."))
   ((%termios :initform nil :accessor %termios)
    (%wakeup-pipe :initform nil :accessor %wakeup-pipe)
    #+unix (%winch-pipe :initform nil :accessor %winch-pipe)
+   (%counter :initform 0 :accessor counter)
+   (%timer-clock :initform nil :accessor timer-clock)
    (%screen :accessor screen
             :type buffer
             :documentation "The contents of the screen")
@@ -467,7 +476,7 @@ Silently clips to the screen region. Blend is a weight between 0 and 1."
 (defmethod rows ((tui tui)) (array-dimension (canvas tui) 0))
 (defmethod cols ((tui tui)) (array-dimension (canvas tui) 1))
 
-(defmethod redisplay :around ((tui tui))
+(defmethod redisplay-internal :around ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen))
       tui
@@ -478,7 +487,6 @@ Silently clips to the screen region. Blend is a weight between 0 and 1."
     ;; never be called elsewhere
     (let ((*put-buffer* canvas))
       (call-next-method))
-
     ;; compute diff and render
     (sys:set-style *default-style* (use-palette tui))
     (loop :with diff = (buffer-diff screen canvas)
@@ -524,6 +532,7 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
         (callback (timer-callback timer)))
     (check-type callback function)
     (check-type interval (real 0))
+    (update-timers tui)
     (pileup:heap-insert timer (timers tui))))
 
 (defmethod cancel-timer ((tui tui) (timer timer))
@@ -551,7 +560,8 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
             subseconds)
       timeval)))
 
-(defmethod run :around ((tui tui) &key (mouse t) (use-altscreen t) (cursor-shape :invisible))
+(defmethod run ((tui tui) &key (mouse t) (use-altscreen t) (cursor-shape :invisible)
+                               (redisplay-on-input t))
   (let ((sys:*character-widths* (make-hash-table))
         #+(or sbcl cmu) (*terminal-io* *standard-output*))
     ;; fill canvas
@@ -588,8 +598,9 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
         (setf (%winch-pipe tui) winch-pipe)
         (sys::non-blocking-pipe wakeup-pipe)
         (setf (%wakeup-pipe tui) wakeup-pipe)
+        (sys:catch-sigwinch (sys::write-fd winch-pipe))
         (unwind-protect
-             (call-next-method)
+             (run-loop tui :redisplay-on-input redisplay-on-input)
           (when (eq (use-palette tui) t)
             (sys::reset-colors)) ; hope
           (disable-mouse)
@@ -611,7 +622,7 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
     (progn
       (setf (%wakeup-pipe tui) (sys::create-event))
       (unwind-protect
-           (call-next-method)
+           (run-loop tui :redisplay-on-input redisplay-on-input)
         (disable-mouse)
         (disable-alternate-screen)
         (set-cursor-shape :bar)
@@ -620,137 +631,144 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
         (setf (%wakeup-pipe tui) nil)))
     (finish-output)))
 
+(declaim (notinline timer-time))
+(defun timer-time () ; spoofed by reentrancy tests
+  (get-internal-real-time))
+
+(defun update-timers (tui &optional (now (timer-time)))
+  (when-let (clock (timer-clock tui))
+    (let ((elapsed (/ (- now clock)
+                      internal-time-units-per-second)))
+      (pileup:map-heap (lambda (timer)
+                         (setf (timer-interval timer)
+                               (max 0 (- (timer-interval timer) elapsed))))
+                       (timers tui))
+      (setf (timer-clock tui) now))))
+
+(defun next-timer-interval (tui)
+  (update-timers tui)
+  (when-let (timer (pileup:heap-top (timers tui)))
+    (timer-interval timer)))
+
+(defun process-expired-timer (tui)
+  (when-let (interval (next-timer-interval tui))
+    (when (zerop interval)
+      (process-timer tui (pileup:heap-pop (timers tui))))))
+
+(defmacro with-loop-generation ((tui) &body body)
+  "Discards stale loop readiness when recursion is detected."
+  (once-only (tui)
+    (with-gensyms (before)
+      `(let ((,before (counter ,tui)))
+         (multiple-value-prog1 (progn ,@body)
+           (when (/= ,before (counter ,tui))
+             (throw 'next-redisplay nil)))))))
+
+(defun call-with-loop-timers (tui function)
+  "Runs `function' with timer accounting shared by all recursive loops on `tui'."
+  (if (timer-clock tui)
+      (funcall function)
+      (progn
+        (setf (timer-clock tui) (timer-time))
+        (unwind-protect
+             (funcall function)
+          (update-timers tui)
+          (setf (timer-clock tui) nil)))))
+
+(defun run-loop (tui &key (redisplay-on-input t))
+  "Runs within an initialized terminal session, sharing timers across recursive loops.
+The recursive caller must restore and draw the enclosing UI before returning, and
+immediately abort any suspended redisplay by throwing `quit-redisplay'."
+  (incf (counter tui))
+  (call-with-loop-timers
+   tui (lambda () (run-event-loop tui redisplay-on-input))))
+
 #+unix
-(defmethod run ((tui tui) &key (redisplay-on-input t))
-  (with-accessors ((timers timers)
-                   (wakeup-pipe %wakeup-pipe)
-                   (winch-pipe %winch-pipe))
-      tui
-    (sys:catch-sigwinch (sys::write-fd winch-pipe))
+(defun run-event-loop (tui redisplay-on-input)
+  (with-accessors ((wakeup-pipe %wakeup-pipe) (winch-pipe %winch-pipe)) tui
     (cffi:with-foreign-objects ((timeval '(:struct sys::c-timeval))
                                 (fd-set '(:struct sys::c-fd-set))
                                 (buf :char 8))
       (catch 'tui-quit
-        (loop
-          :with last-time = (get-internal-real-time)
-          :with nfds = (1+ (max (sys::read-fd wakeup-pipe) (sys::read-fd winch-pipe)))
-          :with got-stdin
-          :for next-timer = (pileup:heap-pop timers)
-          :for timeout = (when next-timer
-                           (write-seconds-to-timeval (timer-interval next-timer)
-                                                     timeval))
-          :do (when (or redisplay-on-input (not got-stdin))
-                (redisplay tui)
-                (force-output))
-              ;; main loop
-              (labels ((update-timeouts ()
-                         (let* ((now (get-internal-real-time))
-                                (elapsed (/ (- now last-time)
-                                            internal-time-units-per-second)))
-                           (pileup:map-heap (lambda (timer)
-                                              (setf (timer-interval timer)
-                                                    (max (- (timer-interval timer) elapsed)
-                                                         0)))
-                                            timers)
-                           (setf last-time now)))
-                       (reschedule-and-update-timers ()
-                         (when next-timer
-                           (pileup:heap-insert next-timer timers)
-                           (update-timeouts))))
-                ;; setup select
-                (sys::fd-zero fd-set)
-                (sys::fd-set sys:+stdin+ fd-set)
-                (sys::fd-set (sys::read-fd wakeup-pipe) fd-set)
-                (sys::fd-set (sys::read-fd winch-pipe) fd-set)
-                (let ((ret (sys::select nfds fd-set
-                                        (cffi:null-pointer) (cffi:null-pointer)
-                                        (or timeout (cffi:null-pointer)))))
-                  (cond ((zerop ret) ; timeout
-                         (setf got-stdin nil)
-                         (when next-timer
-                           (update-timeouts)
-                           (process-timer tui next-timer)))
-                        ((plusp ret)
-                         (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
-                           (sys::c-read (sys::read-fd winch-pipe) buf 8)
-                           (handle-resize tui))
-                         (if (sys::fd-setp sys:+stdin+ fd-set)
-                             (loop :initially (setf got-stdin t)
-                                   :while (listen)
-                                   :for event = (sys:read-event)
-                                   :do (dispatch-event tui event)
-                                   :finally (reschedule-and-update-timers))
-                             ;; must be an event on the pipe: wakeup
-                             (progn
-                               (setf got-stdin nil)
-                               (sys::c-read (sys::read-fd wakeup-pipe) buf 8)
-                               (reschedule-and-update-timers))))
-                        ((= sys::c-errno sys::c-eintr)
-                         (reschedule-and-update-timers))
-                        (t
-                         (sys:error-syscall-error "select failed"))))))))))
+        (loop with nfds = (1+ (max (sys::read-fd wakeup-pipe) (sys::read-fd winch-pipe)))
+              with got-stdin
+              do (catch 'next-redisplay
+                   (when (or redisplay-on-input (not got-stdin))
+                     (with-loop-generation (tui)
+                       (unless (redisplay tui)
+                         (throw 'next-redisplay nil)))
+                     (force-output))
+                   ;;
+                   (let* ((interval (next-timer-interval tui))
+                          (ret (if (listen)
+                                   (progn ; input received during redisplay recursion
+                                     (sys::fd-zero fd-set)
+                                     (sys::fd-set sys:+stdin+ fd-set)
+                                     1)
+                                   (progn
+                                     (sys::fd-zero fd-set)
+                                     (sys::fd-set sys:+stdin+ fd-set)
+                                     (sys::fd-set (sys::read-fd wakeup-pipe) fd-set)
+                                     (sys::fd-set (sys::read-fd winch-pipe) fd-set)
+                                     (sys::select
+                                      nfds fd-set (cffi:null-pointer) (cffi:null-pointer)
+                                      (if interval
+                                          (write-seconds-to-timeval interval timeval)
+                                          (cffi:null-pointer)))))))
+                     (update-timers tui)
+                     (cond ((zerop ret)
+                            (setf got-stdin nil)
+                            (with-loop-generation (tui)
+                              (process-expired-timer tui)))
+                           ((plusp ret)
+                            (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
+                              (sys::c-read (sys::read-fd winch-pipe) buf 8)
+                              (with-loop-generation (tui)
+                                (handle-resize tui)))
+                            (setf got-stdin (sys::fd-setp sys:+stdin+ fd-set))
+                            (when got-stdin
+                              (loop while (listen)
+                                    for event = (sys:read-event)
+                                    do (with-loop-generation (tui)
+                                         (dispatch-event tui event))))
+                            (when (sys::fd-setp (sys::read-fd wakeup-pipe) fd-set)
+                              (sys::c-read (sys::read-fd wakeup-pipe) buf 8)))
+                           ((= sys::c-errno sys::c-eintr))
+                           (t (sys:error-syscall-error "select failed"))))))))))
 
 #+windows
-(defmethod run ((tui tui) &key (redisplay-on-input t))
-  (with-accessors ((timers timers))
-      tui
-    (cffi:with-foreign-object (handles 'sys::handle 2)
-      ;; WaitForMultipleObjects prefers the first, but doesn't matter too much here
-      (setf (cffi:mem-ref handles 'sys::Handle) (first (%termios tui))
-            (cffi:mem-aref handles 'sys::Handle 1) (%wakeup-pipe tui))
-      (catch 'tui-quit
-        (loop
-          :with last-time = (get-internal-real-time)
-          :with got-stdin
-          :for next-timer = (pileup:heap-pop timers)
-          :for timeout = (when next-timer
-                           (truncate (* 1000 (timer-interval next-timer))))
-          :do (when (or redisplay-on-input (not got-stdin))
-                (redisplay tui)
-                (force-output))
-              (labels ((update-timeouts ()
-                         (let* ((now (get-internal-real-time))
-                                (elapsed (/ (- now last-time)
-                                            internal-time-units-per-second)))
-                           (pileup:map-heap (lambda (timer)
-                                              (setf (timer-interval timer)
-                                                    (max (- (timer-interval timer) elapsed)
-                                                         0)))
-                                            timers)
-                           (setf last-time now)))
-                       (reschedule-and-update-timers ()
-                         (when next-timer
-                           (pileup:heap-insert next-timer timers)
-                           (update-timeouts))))
-                ;; DWORD WaitForMultipleObjects(DWORD len, HANDLE *handles,
-                ;;                              BOOL waitAll, DWORD timeout_ms)
-                ;; WaitForMultipleObjects is level triggered
-                ;; XXX (listen) probably uses stdio and doesn't work with buffering
-                (let ((ret (sys::WaitForMultipleObjects 2 handles 0 timeout)))
-                  (cond
-                    ((= ret 0) ; read key, mouse *and resize* events
-                     (setf got-stdin t)
-                     (loop
-                       :initially (when (car (sys:win-events-left (first (%termios tui))))
-                                    (handle-resize tui))
-                       :while (plusp (cdr (sys:win-events-left (first (%termios tui)))))
-                       :for event = (sys:read-event)
-                       :do (dispatch-event tui event)
-                       :finally (reschedule-and-update-timers)
-                                ;; flush stale resize/other events as they make the wait
-                                ;; return immediately. We have treated all input
-                                (sys::FlushConsoleInputBuffer (first (%termios tui)))))
-                    ((= ret 1) ; wakeup
-                     (setf got-stdin nil)
-                     (reschedule-and-update-timers))
-                    ((= ret sys::+wait-timeout+)
-                     (setf got-stdin nil)
-                     (when next-timer
-                       (update-timeouts)
-                       (process-timer tui next-timer)))
-                    ((= ret sys::+wait-failed+)
-                     (sys:error-syscall-error "waitformultipleobjects"))
-                    (t (error "strange error: wait returned ~d" ret))))))))))
+(defun run-event-loop (tui redisplay-on-input)
+  (cffi:with-foreign-object (handles 'sys::handle 2)
+    (setf (cffi:mem-ref handles 'sys::handle) (first (%termios tui))
+          (cffi:mem-aref handles 'sys::handle 1) (%wakeup-pipe tui))
+    (catch 'tui-quit
+      (loop with got-stdin
+            do (catch 'next-redisplay
+                 (when (or redisplay-on-input (not got-stdin))
+                   (with-loop-generation (tui)
+                     (unless (redisplay tui) (throw 'next-redisplay nil)))
+                   (force-output))
+                 (let* ((interval (next-timer-interval tui))
+                        (timeout (if interval (min #xfffffffe (ceiling (* 1000 interval)))
+                                     #xffffffff))
+                        (ret (sys::WaitForMultipleObjects 2 handles 0 timeout)))
+                   (update-timers tui)
+                   (cond ((= ret 0)
+                          (setf got-stdin nil)
+                          (loop for pending = (sys:win-events-left (first (%termios tui)))
+                                do (when (car pending)
+                                     (with-loop-generation (tui) (handle-resize tui)))
+                                while (plusp (cdr pending))
+                                do (setf got-stdin t)
+                                   (with-loop-generation (tui)
+                                     (dispatch-event tui (sys:read-event)))))
+                         ((= ret 1) (setf got-stdin nil))
+                         ((= ret sys::+wait-timeout+)
+                          (setf got-stdin nil)
+                          (with-loop-generation (tui) (process-expired-timer tui)))
+                         ((= ret sys::+wait-failed+)
+                          (sys:error-syscall-error "waitformultipleobjects"))
+                         (t (error "Unexpected wait result: ~d" ret)))))))))
 
 (defmethod stop ((tui tui))
   (throw 'tui-quit nil))

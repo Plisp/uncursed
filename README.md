@@ -24,6 +24,7 @@ NEW: The `elemental` immediate mode layout API is partially stabilised, the `unc
 - [x] basic documentation
 - [x] Windows support (new!)
 - [x] layout abstraction
+- [x] recursive `run-loop`
 - [ ] account for network character delays
 - [ ] high-level widget modules
 
@@ -74,3 +75,4 @@ to avoid slime redirecting output to the REPL, which cannot process terminal esc
 * Call `wakeup` on a tui instance to safely trigger a redisplay from another thread, possibly doing some long running computation or i/o
 * Use a mailbox-popping loop on the main/slime thread to log messages from drawing code to slime and not the terminal screen, see `examples/shockwave.lisp`
 * Use the `use-palette` initarg to control whether the terminal palette is used. The library makes a best effort to avoid messing up user colors on exit, prefer approximation to modifying the palette.
+* For recursive loops, carefully consider `redisplay`'s protocol and reentrancy. Especially note that old timers may observe the context of an outer loop.

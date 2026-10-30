@@ -45,7 +45,7 @@
 (defgeneric render (ui)
   (:documentation "should return the root of view tree"))
 
-(defmethod redisplay ((tui elemental))
+(defmethod redisplay-internal ((tui elemental))
   (setf (slot-value tui '%root-view) (render tui)))
 
 (defun view-traverse (view callback)

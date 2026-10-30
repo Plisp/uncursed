@@ -111,12 +111,12 @@
 
            #:tui
            ;; methods
-           #:run
+           #:run #:run-loop
            #:stop
            #:dispatch-event
            #:rows #:cols
            #:handle-resize
-           #:redisplay
+           #:redisplay #:redisplay-internal
 
            #:schedule-timer
            #:cancel-timer

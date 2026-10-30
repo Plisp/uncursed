@@ -4,7 +4,7 @@
   :license "BSD 3-Clause"
   :defsystem-depends-on ("cffi-grovel")
   :depends-on (:alexandria :cffi :cl-setlocale :pileup #+unix #:terminfo)
-  :version "0.6.0"
+  :version "0.7.0"
   :serial t
   :components ((:file "package")
                #+unix (:cffi-grovel-file "grovel")
@@ -12,4 +12,11 @@
                (:file "palette")
                (:file "util")
                (:file "uncursed")
-               (:file "elemental")))
+               (:file "elemental"))
+
+  :in-order-to ((asdf:test-op (asdf:test-op #:uncursed/tests))))
+
+(asdf:defsystem #:uncursed/tests
+  :depends-on (#:uncursed)
+  :components ((:file "tests"))
+  :perform (asdf:test-op (o c) (uiop:symbol-call :uncursed-tests :run-tests)))

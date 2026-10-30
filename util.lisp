@@ -615,30 +615,38 @@ pointer to the original termios struct returned by a call to `setup-term', to be
   (cffi:defcfun "FlushConsoleInputBuffer" :boolean
     (input-handle Handle))
 
-  (defun win-events-left (Handle)
-    "Returns a cons cell containing a boolean, true when resized and
-an integer representing device events left in the queue.
-This must be called to determine whether there are events left, as (listen)
-is unreliable and lisp events read may not correspond perfectly to windows events."
+  (cffi:defcfun "ReadConsoleInputW" :boolean
+    (input-handle Handle)
+    (buffer (:pointer (:struct input-record)))
+    (n :unsigned-long)
+    (num-read-ptr (:pointer :uint32)))
+
+  (defun win-events-left (handle)
+    "Consumes leading non-device records, returning (resized . device-count)."
     (cffi:with-foreign-object (count-ptr :uint32)
-      (or (GetNumberOfConsoleInputEvents Handle count-ptr)
+      (or (GetNumberOfConsoleInputEvents handle count-ptr)
           (error-syscall-error "GetNumberOfConsoleInputEvents failed"))
       (let ((count (cffi:mem-ref count-ptr :uint32)))
-        (cffi:with-foreign-object (record-buf '(:struct input-record) count)
-          (or (PeekConsoleInputW Handle record-buf count count-ptr)
+        (when (zerop count) (return-from win-events-left (cons nil 0)))
+        (cffi:with-foreign-object (records '(:struct input-record) count)
+          (or (PeekConsoleInputW handle records count count-ptr)
               (error-syscall-error "PeekConsoleInputW failed"))
-          (loop :with read = (cffi:mem-ref count-ptr :uint32)
-                :with resize = nil
-                :with events = 0
-                :for i below read
-                :for record = (cffi:mem-aptr record-buf '(:struct input-record) i)
-                :do (case (cffi:foreign-slot-value record
-                                                   '(:struct input-record)
-                                                   'event-type)
-                      (#x0004 (setf resize t)) ; buffer size event
-                      ((#x0001 #x0002) ; key or mouse events
-                       (incf events)))
-                :finally (return (cons resize events))))))))
+          (loop with resize = nil
+                with events = 0
+                with prefix = 0
+                for i below (cffi:mem-ref count-ptr :uint32)
+                for record = (cffi:mem-aptr records '(:struct input-record) i)
+                for type = (cffi:foreign-slot-value record '(:struct input-record)
+                                                    'event-type)
+                do (cond
+                     ((member type '(#x0001 #x0002)) (incf events))
+                     ((zerop events)
+                      (incf prefix)
+                      (when (= type #x0004) (setf resize t))))
+                finally (when (plusp prefix)
+                          (or (ReadConsoleInputW handle records prefix count-ptr)
+                              (error-syscall-error "ReadConsoleInputW failed")))
+                        (return (cons resize events))))))))
 
 
 ;;; misc

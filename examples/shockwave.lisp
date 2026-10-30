@@ -99,7 +99,7 @@
           :accessor waves
           :type (vector wave))))
 
-(defmethod tui:redisplay ((ui ui))
+(defmethod tui:redisplay-internal ((ui ui))
   (with-simple-restart (nil "continue from redisplay error")
     (loop :with rows := (tui:rows ui)
           :with cols := (tui:cols ui)
