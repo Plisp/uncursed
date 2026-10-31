@@ -116,7 +116,7 @@
            #:dispatch-event
            #:rows #:cols
            #:handle-resize
-           #:redisplay #:redisplay-internal
+           #:redisplay #:redisplay-internal #:quit-redisplay
 
            #:schedule-timer
            #:cancel-timer
