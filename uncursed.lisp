@@ -407,7 +407,10 @@ Silently clips to the screen region. Blend is a weight between 0 and 1."
           :do (setf
                (cell-style cell)
                (cond
-                 ((not blend) (copy-style-from style old-style))
+                 ((not blend)
+                  (or (gethash old-style style-cache)
+                      (setf (gethash old-style style-cache)
+                            (copy-style-from style old-style))))
                  ((numberp blend)
                   (if (style= style old-style)
                       old-style
