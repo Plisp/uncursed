@@ -27,10 +27,14 @@
              :rows (or rows (rect-rows rect))
              :cols (or cols (rect-cols rect))))
 
+(defun rect-has-point-p (rect row col)
+  "Whether `rect' contains the one-based absolute point `row', `col'."
+  (and (< (rect-y rect) row (1+ (rect-y2 rect)))
+       (< (rect-x rect) col (1+ (rect-x2 rect)))))
+
 (defun mouse-within (data rect)
   "Returns true iff the mouse-data `data' is in `rect'"
-  (and (<= (1+ (rect-y rect)) (mouse-data-row data) (rect-y2 rect))
-       (<= (1+ (rect-x rect)) (mouse-data-col data) (rect-x2 rect))))
+  (rect-has-point-p rect (mouse-data-row data) (mouse-data-col data)))
 
 (defstruct (cell (:conc-name cell-)
                  (:copier nil))

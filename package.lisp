@@ -100,7 +100,7 @@
            #:make-rect #:copy-rect
            #:screen-rect
            #:rect-x #:rect-y #:rect-rows #:rect-cols
-           #:rect-x2 #:rect-y2
+           #:rect-x2 #:rect-y2 #:rect-has-point-p
            #:clamp-rect
            #:mouse-within
 
