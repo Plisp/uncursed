@@ -391,21 +391,19 @@ the column is negative or the line is out of bounds."
                                 (+ (the single-float (* weight b1 b1))
                                    (the single-float (* (- 1 weight) b2 b2)))))))))
 
-(defun fill-rect (style region rect &key char blend (buffer *put-buffer*))
-  "Fills the rect `region' relative to `rect' with the provided style.
-Silently clips to the screen region. Blend is a weight between 0 and 1."
+(defun fill-rect (style rect &key char blend (buffer *put-buffer*))
+  "Fills the absolute `rect' in `buffer' clipped to `buffer' with `style'.
+`char' optionally replaces cell contents;
+`blend' is an optional color weight between 0 and 1."
   (when (and blend (not (<= 0 blend 1)))
     (error "invalid blend ratio"))
   (loop
     :with string = (when char (string char))
-    :with rect-clamped = (clamp-rect-to-screen rect)
     :with style-cache = (make-hash-table :test #'eq)
-    :repeat (rect-rows region)
-    :for y :from (+ (rect-y rect-clamped) (rect-y region)) :below (array-dimension buffer 0)
+    :for y :from (rect-y rect) :below (min (rect-y2 rect) (array-dimension buffer 0))
     :do (loop
-          :repeat (rect-cols region)
-          :for x :from (+ (rect-x rect-clamped) (rect-x region))
-            :below (array-dimension buffer 1)
+          :for x :from (rect-x rect)
+            :below (min (rect-x2 rect) (array-dimension buffer 1))
           :for cell = (aref buffer y x)
           :for old-style = (cell-style cell)
           :do (setf

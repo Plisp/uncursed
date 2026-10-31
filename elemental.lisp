@@ -230,10 +230,10 @@ container view with its children in the order they were placed."
                                          t))))
               (backwards-blit old (rect view) axis)
               (fill-rect (make-style :bg fill-bg)
-                         (make-rect-along axis :start old-size :size expansion
-                                               :cross-start 0
-                                               :cross-size (rect-cross-size (rect view) axis))
-                         (rect view) :char #\space))
+                         (copy-rect-along (rect view) axis
+                                          :start (+ (rect-start (rect view) axis) old-size)
+                                          :size expansion)
+                         :char #\space))
     ;; take as little space as possible
     (make-instance 'view :rect (copy-rect-along parent axis
                                                 :size (when noalloc
