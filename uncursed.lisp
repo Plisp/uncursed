@@ -85,18 +85,12 @@ May only be called from within the dynamic-extent of a call to `run'."))
 (defgeneric dispatch-event (tui event))
 (defgeneric rows (tui))
 (defgeneric cols (tui))
-(defgeneric redisplay-internal (tui)
-  (:documentation "Implements drawing to be triggered through `redisplay'."))
-
-(defun redisplay (tui)
-  "Redisplays `tui', returning T on completion or NIL when `quit-redisplay' is thrown."
-  (catch 'quit-redisplay
-    (redisplay-internal tui)
-    t))
+(defgeneric redisplay (tui)
+  (:documentation "Draws the UI to the canvas."))
 
 (defgeneric handle-resize (tui)
   (:documentation "use this to detect resizes independent of ABA problems when redisplay-on-input
-is set."))
+is set. Ensure this method does not commit stale changes if it can enter a recursive loop."))
 
 (defun wakeup (tui)
   "Wakes up the event loop of `tui' in a thread-safe manner."
@@ -112,7 +106,6 @@ is set."))
   ((%termios :initform nil :accessor %termios)
    (%wakeup-pipe :initform nil :accessor %wakeup-pipe)
    #+unix (%winch-pipe :initform nil :accessor %winch-pipe)
-   (%counter :initform 0 :accessor counter)
    (%timer-clock :initform nil :accessor timer-clock)
    (%screen :accessor screen
             :type buffer
@@ -481,7 +474,7 @@ the column is negative or the line is out of bounds."
 (defmethod rows ((tui tui)) (array-dimension (canvas tui) 0))
 (defmethod cols ((tui tui)) (array-dimension (canvas tui) 1))
 
-(defmethod redisplay-internal :around ((tui tui))
+(defmethod redisplay :around ((tui tui))
   (with-accessors ((canvas canvas)
                    (screen screen))
       tui
@@ -660,15 +653,6 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
     (when (zerop interval)
       (process-timer tui (pileup:heap-pop (timers tui))))))
 
-(defmacro with-loop-generation ((tui) &body body)
-  "Discards stale loop readiness when recursion is detected."
-  (once-only (tui)
-    (with-gensyms (before)
-      `(let ((,before (counter ,tui)))
-         (multiple-value-prog1 (progn ,@body)
-           (when (/= ,before (counter ,tui))
-             (throw 'next-redisplay nil)))))))
-
 (defun call-with-loop-timers (tui function)
   "Runs `function' with timer accounting shared by all recursive loops on `tui'."
   (if (timer-clock tui)
@@ -680,13 +664,19 @@ either the next timer expiry interval in seconds or NIL meaning to cancel the ti
           (update-timers tui)
           (setf (timer-clock tui) nil)))))
 
+(defvar *loop-active* nil)
+
 (defun run-loop (tui &key (redisplay-on-input t))
-  "Runs within an initialized terminal session, sharing timers across recursive loops.
-The recursive caller must restore and draw the enclosing UI before returning, and
-immediately abort any suspended redisplay by throwing `quit-redisplay'."
-  (incf (counter tui))
-  (call-with-loop-timers
-   tui (lambda () (run-event-loop tui redisplay-on-input))))
+  "Runs within an initialized terminal session, sharing timers with recursive loops.
+On normal return from a recursive invocation, throws to the enclosing `next-redisplay'.
+Any cleanup and redrawing should be done using unwind-protect."
+  (multiple-value-prog1
+      (call-with-loop-timers
+       tui (lambda ()
+             (let ((*loop-active* t))
+               (run-event-loop tui redisplay-on-input))))
+    (when *loop-active*
+      (throw 'next-redisplay nil))))
 
 #+unix
 (defun run-event-loop (tui redisplay-on-input)
@@ -699,9 +689,7 @@ immediately abort any suspended redisplay by throwing `quit-redisplay'."
               with got-stdin
               do (catch 'next-redisplay
                    (when (or redisplay-on-input (not got-stdin))
-                     (with-loop-generation (tui)
-                       (unless (redisplay tui)
-                         (throw 'next-redisplay nil)))
+                     (redisplay tui)
                      (force-output))
                    ;;
                    (let* ((interval (next-timer-interval tui))
@@ -723,19 +711,16 @@ immediately abort any suspended redisplay by throwing `quit-redisplay'."
                      (update-timers tui)
                      (cond ((zerop ret)
                             (setf got-stdin nil)
-                            (with-loop-generation (tui)
-                              (process-expired-timer tui)))
+                            (process-expired-timer tui))
                            ((plusp ret)
                             (when (sys::fd-setp (sys::read-fd winch-pipe) fd-set)
                               (sys::c-read (sys::read-fd winch-pipe) buf 8)
-                              (with-loop-generation (tui)
-                                (handle-resize tui)))
+                              (handle-resize tui))
                             (setf got-stdin (sys::fd-setp sys:+stdin+ fd-set))
                             (when got-stdin
                               (loop while (listen)
                                     for event = (sys:read-event)
-                                    do (with-loop-generation (tui)
-                                         (dispatch-event tui event))))
+                                    do (dispatch-event tui event)))
                             (when (sys::fd-setp (sys::read-fd wakeup-pipe) fd-set)
                               (sys::c-read (sys::read-fd wakeup-pipe) buf 8)))
                            ((= sys::c-errno sys::c-eintr))
@@ -750,8 +735,7 @@ immediately abort any suspended redisplay by throwing `quit-redisplay'."
       (loop with got-stdin
             do (catch 'next-redisplay
                  (when (or redisplay-on-input (not got-stdin))
-                   (with-loop-generation (tui)
-                     (unless (redisplay tui) (throw 'next-redisplay nil)))
+                   (redisplay tui)
                    (force-output))
                  (let* ((interval (next-timer-interval tui))
                         (timeout (if interval (min #xfffffffe (ceiling (* 1000 interval)))
@@ -762,15 +746,14 @@ immediately abort any suspended redisplay by throwing `quit-redisplay'."
                           (setf got-stdin nil)
                           (loop for pending = (sys:win-events-left (first (%termios tui)))
                                 do (when (car pending)
-                                     (with-loop-generation (tui) (handle-resize tui)))
+                                     (handle-resize tui))
                                 while (plusp (cdr pending))
                                 do (setf got-stdin t)
-                                   (with-loop-generation (tui)
-                                     (dispatch-event tui (sys:read-event)))))
+                                   (dispatch-event tui (sys:read-event))))
                          ((= ret 1) (setf got-stdin nil))
                          ((= ret sys::+wait-timeout+)
                           (setf got-stdin nil)
-                          (with-loop-generation (tui) (process-expired-timer tui)))
+                          (process-expired-timer tui))
                          ((= ret sys::+wait-failed+)
                           (sys:error-syscall-error "waitformultipleobjects"))
                          (t (error "Unexpected wait result: ~d" ret)))))))))

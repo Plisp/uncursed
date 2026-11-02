@@ -91,7 +91,7 @@
           (lambda (ui input)
             (declare (ignore input))
             (uncursed::process-expired-timer ui))))
-      (catch 'abort-timer
+      (catch 'uncursed:next-redisplay
         (handler-bind
             ((error (lambda (condition)
                       (declare (ignore condition))
@@ -145,31 +145,31 @@
               0)))
         (uncursed:run-loop ui)))
     (check (equal '(1 1 1) (reverse waits)))
-    (check (= 1 (uncursed::counter ui)))
     (check (null (uncursed::timer-clock ui)))))
 
 (defun test-generation ()
-  (let ((ui (make-instance 'uncursed:tui)) (depth 0) (clock nil))
+  (let ((ui (make-instance 'uncursed:tui)) (depth 0) (cleaned nil) (continued nil))
     (with-functions
         ((uncursed::run-event-loop
           (lambda (ui input)
             (declare (ignore input))
             (if (zerop depth)
-                (progn
+                (catch 'uncursed:next-redisplay
                   (incf depth)
-                  (setf clock (uncursed::timer-clock ui))
-                  (uncursed:run-loop ui)
-                  (check (= clock (uncursed::timer-clock ui))))
-                (check (= clock (uncursed::timer-clock ui)))))))
+                  (unwind-protect (uncursed:run-loop ui)
+                    (setf cleaned t)
+                    (check (uncursed::timer-clock ui)))
+                  (setf continued t))
+                (check (uncursed::timer-clock ui))))))
       (uncursed:run-loop ui))
-    (check (= 2 (uncursed::counter ui)))
+    (check cleaned)
+    (check (not continued))
     (check (null (uncursed::timer-clock ui)))
-    (let ((continued nil))
-      (catch 'uncursed::next-redisplay
-        (uncursed::with-loop-generation (ui)
-          (incf (uncursed::counter ui)))
-        (setf continued t))
-      (check (not continued)))))
+    (let ((uncursed::*loop-active* t))
+      (with-functions ((uncursed::run-event-loop
+                       (lambda (&rest args)
+                         (declare (ignore args)) (throw 'escape :escaped))))
+        (check (eq :escaped (catch 'escape (uncursed:run-loop ui))))))))
 
 #+windows
 (defun test-windows-loop ()
@@ -190,7 +190,7 @@
             (incf notifications)
             '(t . 0)))
          (uncursed:handle-resize
-          (lambda (ui) (incf (uncursed::counter ui)))))
+          (lambda (ui) (declare (ignore ui)) (throw 'uncursed:next-redisplay nil))))
       (uncursed:run-loop ui))
     (check (equal '(4294967295 4294967295) waits))
     ;; the recursive resize skips any further processing

@@ -62,7 +62,7 @@ It is recommended to bind *character-widths* dynamically in calling threads."
 #+unix
 (defun terminal-dimensions ()
   "Returns a cons (lines . columns) containing the dimensions of the terminal device.
-Returns NIL on failure."
+Returns *fallback-terminal-dimensions* on failure."
   (cffi:with-foreign-object (ws '(:struct c-winsize))
     (when (= 0 (cffi:foreign-funcall "ioctl" :int 1 :int c-get-winsz :pointer ws :int))
       (cffi:with-foreign-slots ((c-ws-rows c-ws-cols) ws (:struct c-winsize))
