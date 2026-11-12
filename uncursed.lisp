@@ -386,7 +386,8 @@ the column is negative or the line is out of bounds."
 
 (defun fill-rect (style rect &key char blend (buffer *put-buffer*))
   "Fills the absolute `rect' in `buffer' clipped to `buffer' with `style'.
-`char' optionally replaces cell contents;
+`char' optionally replaces cell contents, otherwise only colors change and attributes
+are retained.
 `blend' is an optional color weight between 0 and 1."
   (when (and blend (not (<= 0 blend 1)))
     (error "invalid blend ratio"))
@@ -405,7 +406,13 @@ the column is negative or the line is out of bounds."
                  ((not blend)
                   (or (gethash old-style style-cache)
                       (setf (gethash old-style style-cache)
-                            (copy-style-from style old-style))))
+                            (if char
+                                (copy-style-from style old-style)
+                                (copy-style old-style
+                                            :fg (or (fg style) (fg old-style))
+                                            :bg (or (bg style) (bg old-style))
+                                            :boldp :preserve :italicp :preserve
+                                            :reversep :preserve :underlinep :preserve)))))
                  ((numberp blend)
                   (if (style= style old-style)
                       old-style
@@ -415,9 +422,10 @@ the column is negative or the line is out of bounds."
                               (copy-style old-style
                                           :fg (blend-rgb (fg style) (fg old-style) blend)
                                           :bg (blend-rgb (bg style) (bg old-style) blend)
-                                          :boldp (boldp style) :italicp (italicp style)
-                                          :reversep (reversep style)
-                                          :underlinep (underlinep style))))))))
+                                          :boldp (if char (boldp style) :preserve)
+                                          :italicp (if char (italicp style) :preserve)
+                                          :reversep (if char (reversep style) :preserve)
+                                          :underlinep (if char (underlinep style) :preserve))))))))
               (when char
                 (setf (cell-string cell) string)))))
 

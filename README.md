@@ -47,11 +47,11 @@ All addressing is done relative to `rect`s. `rows` and `cols` get the toplevel t
   (cols (error "rect COLS not provided") :type fixnum :read-only t))
 ```
 
-* `(put char line col rect &optional style)` which writes `char` at 1-based line/col coordinates relative to `rect`. `put*` does the same but silently ignoring.
-* `(puts string line col rect &optional style)` same thing with a string, with truncating behavior at rect edges.`puts*` does the same but silently ignoring out of bounds rows.
-* `(fill-rect style rect &key char blend buffer)` applies `style` to an absolute `rect` clipped to the drawing buffer, and fills with a character if provided. Optionally blends with existing color, preferring the provided one with weight `0 <= blend <= 1`.
+* `(put char line col rect &optional style)` which writes `char` at 1-based line/col coordinates relative to `rect`. `put*` does the same but silently ignoring. Attributes are off by default, overriding the canvas.
+* `(puts string line col rect &optional style)` same thing with a string, with truncating behavior at rect edges.`puts*` does the same but silently ignoring out of bounds rows. Attributes are off by default, overriding the canvas.
+* `(fill-rect style rect &key char blend buffer)` applies `style` to an absolute `rect` clipped to the drawing buffer, and fills with a character if provided (if `char` provided then attributes are off by default, otherwise inherited). Optionally blends with existing color, preferring the provided one with weight `0 <= blend <= 1`.
 
-These functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and optionally accept an immutable `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported. Existing color is preserved by default when merging styles and attributes are off by default, use copy-style `:preserve` to apply attributes.
+These functions may raise a `view-bounds-error` when attempting to draw outside the view's dimensions and optionally accept an immutable `style` struct with the following fields, corresponding the terminal attributes of rendered text where supported. Existing color is preserved by default when merging styles.
 ```lisp
 (defstruct (style (:conc-name nil) (:copier nil))
   (fg nil :type (or null (integer #x000000 #xffffff)) :read-only t)
