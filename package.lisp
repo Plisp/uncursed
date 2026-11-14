@@ -109,6 +109,13 @@
            #:timer-callback
            #:timer-interval
 
+           ;; low level, useful if you're familiar with the source
+           #:cell #:make-cell
+           #:*put-buffer*
+           #:cell-string
+           #:cell-style
+           #:clear-buffer
+
            #:tui
            ;; methods
            #:run #:run-loop

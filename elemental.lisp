@@ -259,9 +259,9 @@ The following macro bindings are supplied to record views, ignoring their argume
 once the container is full.
 - (place (var) form) evaluates `form' with `var' bound to the remaining space.
 `form' should return (values view grow &optional fill-bg). `view''s rect should bound the
-area drawn to the buffer, and is clamped to `rect'. A positive `grow' is the *proportion* of
-the space left once all children are placed that the view expands into, filled with
-`fill-bg'; without growth the container takes as little space as possible.
+area drawn to the buffer, and is clamped to `rect'. A positive `grow' is a *proportion* of
+space left in the view (once all children are placed) that the view should expand to,
+filling the background with `fill-bg'; when `grow' is NIL, the container fits its contents.
 - (pad n) leaves `n' cells empty.
 - (full) is true once the container is full, so the body can stop early.
 - `cursor' when provided is bound to the container's cursor for use with the
